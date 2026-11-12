@@ -3,3 +3,4 @@ raw_assets/
 db/*.db
 db/*.db-journal
 __pycache__/
+build/
