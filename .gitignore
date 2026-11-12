@@ -1,0 +1,5 @@
+# Extracted game data (copyrighted, large) and local DB
+raw_assets/
+db/*.db
+db/*.db-journal
+__pycache__/
