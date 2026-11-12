@@ -321,6 +321,7 @@ CREATE TABLE IF NOT EXISTS strings (
     pl_extra           TEXT    NOT NULL DEFAULT '',
     ru_extra           TEXT    NOT NULL DEFAULT '',
     uk_extra           TEXT    NOT NULL DEFAULT '',
+    qa_note            TEXT    NOT NULL DEFAULT '',
     UNIQUE (source_file, table_name, string_id)
 );
 CREATE INDEX IF NOT EXISTS idx_strings_status ON strings(status);
@@ -408,7 +409,8 @@ def main():
                         vals[lang] = ("", "", "")
                     else:
                         vals[lang] = (e[2], e[3], e[4])
-                gender = int(bool(vals["plpl"][1]) or bool(vals["enus"][1]))
+                # gender variant = a FemaleText in any language; ExtraText (3rd/neutral variant) is not counted
+                gender = int(bool(vals["plpl"][1]) or bool(vals["enus"][1]) or bool(vals["ruru"][1]))
                 rows.append((src, tname, key, *vals["enus"][:2], *vals["plpl"][:2], *vals["ruru"][:2], gender, cat,
                              vals["enus"][2], vals["plpl"][2], vals["ruru"][2]))
         stats[src] = dict(tables=len(order), absent=absent)
