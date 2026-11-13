@@ -21,7 +21,7 @@ raw_assets/<Source>_Text_<lang>.uasset   original decompressed Zen packages = te
 db/avowed_l10n.db                    SQLite, tables `strings`, `glossary` (git-ignored: binary + game data; back up uk_* work separately)
 tools/batch_io.py                    batch export / validated import / stats / QA / glossary (see "Translation pipeline")
 tools/workflows/*.js                 Workflow scripts for parallel translation (translate_wf) and QA (qa_wf)
-docs/style_uk.md, docs/glossary_uk.md   style rules and the approved Ukrainian glossary (generated from table `glossary`)
+docs/style_uk.md, docs/glossary_uk.md   style rules and the approved Ukrainian glossary (generated from table `glossary`: `kind` = entity type, `note` = translation rule — the only field sent to translators, `lore` = what it means in Eora, `source` = where checked; `migrate` adds lore/source to an existing DB)
 ```
 `<Source>` ∈ {`BaseGame`, `D11`}; `<lang>` ∈ {`enus`, `plpl`, `ruru`}. The repacker takes `*_plpl.uasset` as template, substitutes DefaultText/FemaleText/ExtraText with `uk_*` (fallback English), fixes CookedSerialSize and keeps the 12-byte footer.
 

@@ -17,7 +17,7 @@ Commands
   sample --pct 2.5             stratified QA sample -> logs/qa/in/QNN.jsonl
   review FILE                  apply QA verdicts
   candidates                   glossary candidate terms -> logs/glossary_candidates.tsv
-  glossary-import FILE         JSONL {en,uk,uf,ux,kind,note} -> table glossary
+  glossary-import FILE         JSONL {en,uk,uf,ux,kind,note[,lore,source]} -> table glossary (absent lore/source keep the stored value)
   glossary-md                  docs/glossary_uk.md from the table
   apply-glossary               rows whose English text IS a glossary term are filled from the glossary
   audit-glossary [--mark]      translated rows that lack the stem of a glossary term present in the English text
@@ -64,23 +64,30 @@ CREATE TABLE IF NOT EXISTS glossary (
     note      TEXT NOT NULL DEFAULT '',
     pl        TEXT NOT NULL DEFAULT '',
     ru        TEXT NOT NULL DEFAULT '',
-    freq      INTEGER NOT NULL DEFAULT 0
+    freq      INTEGER NOT NULL DEFAULT 0,
+    lore      TEXT NOT NULL DEFAULT '',
+    source    TEXT NOT NULL DEFAULT ''
 )"""
+# Field semantics (the review asked to stop mixing them in one column):
+#   kind   = entity type (deity, person, place, creature, faction, title, term, ...)  -> section of docs/glossary_uk.md
+#   note   = translation_note: declension, gender, spelling, cross-references. ONLY this goes to translator agents (glossary_subset).
+#   lore   = what the entity means in Eora; reference for humans/QA, never a translation rule
+#   source = where lore/usage was checked (game table, codex, conversation)
 
 SEED = [  # mandated by the project owner: (en, uk, uk_female, uk_extra, kind, note)
     ("Living Lands", "Живі Землі", "", "", "place", ""),
     ("Aedyr", "Едір", "", "", "place", "прикметник Aedyran — едірський"),
     ("Envoy", "Посланець", "Посланниця", "Посланець/Посланниця", "title", "титул гравця"),
-    ("Godlike", "Богоподібний", "Богоподібна", "Богоподібний/Богоподібна", "term", "раса/ознака"),
-    ("Adra", "Адра", "", "", "term", "кристалічна/магічна речовина; не змінювати"),
+    ("Godlike", "Богоподібний", "Богоподібна", "Богоподібний/Богоподібна", "term", "ознака людей будь-якого народу, не окрема раса"),
+    ("Adra", "Адра", "", "", "term", "не змінювати; адровий стовп, Адраган"),
     ("Essence", "Есенція", "", "", "term", ""),
     ("Dreamscourge", "Сновидна Моровиця", "", "", "term", "хвороба"),
     ("Paradis", "Парадіс", "", "", "place", ""),
     ("Woedica", "Воедіка", "", "", "deity", ""),
     ("Sapadal", "Сападал", "", "", "deity", ""),
-    ("Kith", "Кіти", "", "", "term", "народи Eora; множина; однина — кіт (з малої в загальному значенні не вживати)"),
+    ("Kith", "Розумні істоти", "", "", "term", "народи Eora (PL istoty rozumne); однина — розумна істота; не «кіт» (омонім)"),
     ("Orlan", "Орлан", "", "", "term", "раса"),
-    ("AuMaua", "АуМауа", "", "", "term", "раса; також Aumaua"),
+    ("Aumaua", "Аумауа", "", "", "term", "раса; регістр як в оригіналі (у суцільному тексті — аумауа)"),
 ]
 
 
@@ -216,6 +223,10 @@ def cmd_migrate(a):
     if "qa_note" not in cols:
         con.execute("ALTER TABLE strings ADD COLUMN qa_note TEXT NOT NULL DEFAULT ''")
     con.execute(SCHEMA_GLOSSARY)
+    gcols = {r[1] for r in con.execute("PRAGMA table_info(glossary)")}
+    for c in ("lore", "source"):
+        if c not in gcols:
+            con.execute(f"ALTER TABLE glossary ADD COLUMN {c} TEXT NOT NULL DEFAULT ''")
     con.execute("BEGIN IMMEDIATE")
     # gender = a female variant in ANY language; ExtraText (third/neutral variant) is deliberately not counted
     con.execute("UPDATE strings SET has_gender_variant = (en_female!='' OR pl_female!='' OR ru_female!='')")
@@ -526,14 +537,16 @@ def cmd_glossary_import(a):
         except Exception:  # noqa: BLE001
             bad += 1
             continue
-        old = con.execute("SELECT uk FROM glossary WHERE en=?", (en,)).fetchone()
+        old = con.execute("SELECT uk, lore, source FROM glossary WHERE en=?", (en,)).fetchone()
         if old and o.get("seed_lock", True) and en in {s[0] for s in SEED}:
             continue  # mandated entries are never overwritten
         for ch in "’ʼ":
             uk = uk.replace(ch, "'")
-        con.execute("INSERT OR REPLACE INTO glossary(en, uk, uk_female, uk_extra, kind, note, pl, ru, freq) VALUES (?,?,?,?,?,?,?,?,?)",
+        lore = o.get("lore", old["lore"] if old else "")
+        source = o.get("source", old["source"] if old else "")
+        con.execute("INSERT OR REPLACE INTO glossary(en, uk, uk_female, uk_extra, kind, note, pl, ru, freq, lore, source) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     (en, uk, o.get("uf", ""), o.get("ux", ""), o.get("kind", "term"), o.get("note", ""), o.get("pl", ""),
-                     o.get("ru", ""), int(o.get("freq", 0))))
+                     o.get("ru", ""), int(o.get("freq", 0)), lore, source))
         n += 1
     con.execute("COMMIT")
     print(f"glossary-import: {n} upserted, {bad} rejected; table size {con.execute('select count(*) from glossary').fetchone()[0]}")
@@ -547,11 +560,12 @@ def cmd_glossary_md(a):
         kinds[g["kind"]].append(g)
     lines = ["# Глосарій Avowed (Eora) — українські відповідники", "",
              "Джерело істини — таблиця `glossary` в `db/avowed_l10n.db`; цей файл генерує `python tools/batch_io.py glossary-md`.",
-             "Один термін = один переклад в усіх категоріях. Форми: чол. / жін. / нейтр. (`uk_extra`) — лише для термінів з гендерними варіантами.", ""]
+             "Один термін = один переклад в усіх категоріях. Форми: чол. / жін. / нейтр. (`uk_extra`) — лише для термінів з гендерними варіантами.",
+             "Заголовок розділу = тип сутності (`kind`). «Правило» (`note`) — відмінювання, рід, написання, перехресні посилання: єдине, що отримують перекладачі. «Лор» (`lore`) — що це в світі Eora, довідка для людей і QA, не правило. «Джерело» (`source`) — де це перевірено.", ""]
     for k in sorted(kinds):
-        lines += [f"## {k}", "", "| EN | UK | жін. | нейтр. | примітка |", "|---|---|---|---|---|"]
+        lines += [f"## {k}", "", "| EN | UK | жін. | нейтр. | правило | лор | джерело |", "|---|---|---|---|---|---|---|"]
         for g in sorted(kinds[k], key=lambda x: x["en"].lower()):
-            lines.append(f"| {g['en']} | {g['uk']} | {g['uk_female']} | {g['uk_extra']} | {g['note']} |")
+            lines.append(f"| {g['en']} | {g['uk']} | {g['uk_female']} | {g['uk_extra']} | {g['note']} | {g['lore']} | {g['source']} |")
         lines.append("")
     (DOCS / "glossary_uk.md").write_text("\n".join(lines), encoding="utf-8")
     print(f"glossary-md: {sum(len(v) for v in kinds.values())} terms in {len(kinds)} groups -> docs/glossary_uk.md")
