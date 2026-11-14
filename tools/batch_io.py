@@ -79,7 +79,7 @@ PL_CHARS = re.compile("[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]")
 CTRL = re.compile("[\x00-\x08\x0c\x0e-\x1f\x7f  ]")      # \x0b (vertical tab) is a real line break in some sources
 FORMAL_YOU = re.compile(r"\b(?:[Вв]и|[Вв]ас|[Вв]ам|[Вв]ами|[Вв]аш\w*)\b")
 MASC_PAST = re.compile(r"\b[Тт]и\s+(?:не\s+|вже\s+|ще\s+|лише\s+|одразу\s+)?\w*(?:[аеиіоуяє]в|шов|ів)\b")
-RUSISM = re.compile(r"призива|являєтьс|слідуюч|прийма\w* участь|на протязі|в залежності від|відноситьс", re.I)
+RUSISM = re.compile(r"призива|являєтьс|слідуюч|прийма\w* участь|на протязі|в залежності від|відноситьс|стараюс|стараєш|скоріше|прямо\s+як|берегись|проявляєтьс", re.I)
 PROPER_KINDS = ("place", "person", "deity", "faction", "creature", "title")
 
 
@@ -828,10 +828,44 @@ def cmd_audit(a):
     print(f"audit-glossary: {len(marks)} rows without the glossary term{' (marked needs_fix)' if a.mark else ''}; top: {res.most_common(10)}")
 
 
+def cmd_audit_changed(a):
+    """Glossary entries were corrected after rows had been translated: JSON [{en, old, new}] (old/new = uk) ->
+    rows whose English text has the term but whose Ukrainian lacks the NEW form go back to needs_fix with the change as note."""
+    ch = json.loads(Path(a.file).read_text(encoding="utf-8"))
+    terms = []
+    for c in ch:
+        words = [w for w in re.split(r"[\s/:,\-]+", c["new"].lower()) if len(w) >= 3]
+        olds = [w for w in re.split(r"[\s/:,\-]+", c["old"].lower()) if len(w) >= 3]
+        if words and [w[:max(3, len(w) - 2)] for w in words] != [w[:max(3, len(w) - 2)] for w in olds]:   # capitalisation-only changes are ignored
+            terms.append((c["en"], c["old"], c["new"], [w[:max(3, len(w) - 2)] for w in words],
+                          re.compile(r"(?<![A-Za-z])" + re.escape(c["en"]) + r"(?:'s|s)?(?![A-Za-z])")))   # case-sensitive: "Lies" is not "lies"
+    con = connect()
+    marks, per = [], collections.Counter()
+    for r in con.execute(f"SELECT * FROM strings WHERE {scope_sql(a.scope)} AND status IN ('draft','reviewed') AND uk_default!=''"):
+        if r["qa_note"] == "kept as source":
+            continue
+        en = plain_of(r["en_default"])
+        low = plain_of(r["uk_default"]).lower()
+        hit = [(t[0], t[1], t[2]) for t in terms if t[4].search(en) and not all(w in low for w in t[3])]
+        if hit:
+            for h in hit:
+                per[h[0]] += 1
+            marks.append(("glossary changed: " + "; ".join(f"{e}: {o} -> {n}" for e, o, n in hit[:3]), r["id"]))
+    if a.mark and marks:
+        con.execute("BEGIN IMMEDIATE")
+        con.executemany("UPDATE strings SET status='needs_fix', qa_note=? WHERE id=? AND status IN ('draft','reviewed')", marks)
+        con.execute("COMMIT")
+    print(f"audit-changed: {len(terms)} changed terms checked, {len(marks)} rows{' marked needs_fix' if a.mark else ' to fix'}; top: {per.most_common(8)}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("migrate")
+    ac = sub.add_parser("audit-changed")
+    ac.add_argument("--file", default=str(LOGS / "glossary_changes.json"))
+    ac.add_argument("--scope", choices=("ui", "story", "all"), default="all")
+    ac.add_argument("--mark", action="store_true")
     e = sub.add_parser("export")
     e.add_argument("--fix", action="store_true")
     e.add_argument("--statuses", default="new")
@@ -883,7 +917,8 @@ def main():
     {"migrate": cmd_migrate, "export": cmd_export, "import": cmd_import, "validate": cmd_validate, "stats": cmd_stats,
      "sample": cmd_sample, "review": cmd_review, "candidates": cmd_candidates, "glossary-import": cmd_glossary_import,
      "glossary-md": cmd_glossary_md, "apply-glossary": cmd_apply_glossary, "audit-glossary": cmd_audit,
-     "qa-report": cmd_qa_report, "reflag": cmd_reflag, "flag-to-fix": cmd_flag_to_fix}[a.cmd](a)
+     "qa-report": cmd_qa_report, "reflag": cmd_reflag, "flag-to-fix": cmd_flag_to_fix,
+     "audit-changed": cmd_audit_changed}[a.cmd](a)
 
 
 if __name__ == "__main__":
