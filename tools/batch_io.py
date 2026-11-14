@@ -39,7 +39,30 @@ REPO = Path(__file__).resolve().parent.parent
 DB = REPO / "db" / "avowed_l10n.db"
 LOGS = REPO / "logs"
 DOCS = REPO / "docs"
-SCOPE = "(source_file='D11' OR (category LIKE 'game/%' AND category!='game/codex'))"
+SCOPE_UI = "(source_file='D11' OR (category LIKE 'game/%' AND category!='game/codex'))"
+SCOPE_STORY = "(category IN ('conversations','chatter','quests','game/codex') AND table_name NOT LIKE 'conversations/test%')"
+SCOPE = f"({SCOPE_UI} OR {SCOPE_STORY})"
+STORY_CATS = ("conversations", "chatter", "quests", "game/codex")
+STORY_PRIORITY = ["conv:07_prologue", "quests", "chatter", "codex", "conv:companions", "conv:03_dawnshore",
+                  "conv:01_emerald_stair", "conv:04_shatterscarp", "conv:02_galawains_tusks", "conv:06_dawnshore_redux",
+                  "conv:05_garden"]
+
+
+def scope_sql(name):
+    return {"ui": SCOPE_UI, "story": SCOPE_STORY, "all": SCOPE}[name]
+
+
+def group_where(g):
+    """SQL condition selecting one priority group."""
+    if g == "D11":
+        return "source_file='D11'"
+    if g.startswith("conv:"):
+        return f"(category='conversations' AND table_name LIKE 'conversations/{g[5:]}%')"
+    if g in ("quests", "chatter"):
+        return f"category='{g}'"
+    if g == "codex":
+        return "category='game/codex'"
+    return f"(category='{g}' AND source_file!='D11')"
 PRIORITY = ["D11", "game/gui", "game/inputbindings", "game/tooltips", "game/tutorial", "game/characterstats",
             "game/abilities", "game/statuseffects", "game/deities", "game/locations", "game/waypoints",
             "game/characters", "game/bestiary", "game/achievements", "game/lore", "game/oeiunreal",
@@ -53,6 +76,38 @@ ICU_KEYS = {"zero", "one", "two", "few", "many", "other"}
 CYR = re.compile("[А-Яа-яІіЇїЄєҐґ]")
 RU_ONLY = re.compile("[ыэъёЫЭЪЁ]")
 PL_CHARS = re.compile("[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]")
+CTRL = re.compile("[\x00-\x08\x0c\x0e-\x1f\x7f  ]")      # \x0b (vertical tab) is a real line break in some sources
+FORMAL_YOU = re.compile(r"\b(?:[Вв]и|[Вв]ас|[Вв]ам|[Вв]ами|[Вв]аш\w*)\b")
+MASC_PAST = re.compile(r"\b[Тт]и\s+(?:не\s+|вже\s+|ще\s+|лише\s+|одразу\s+)?\w*(?:[аеиіоуяє]в|шов|ів)\b")
+RUSISM = re.compile(r"призива|являєтьс|слідуюч|прийма\w* участь|на протязі|в залежності від|відноситьс", re.I)
+PROPER_KINDS = ("place", "person", "deity", "faction", "creature", "title")
+
+
+def proper_glossary(con):
+    gl = [g for g in glossary_rows(con) if len(g["en"]) >= 4 and g["kind"] in PROPER_KINDS]
+    for g in gl:
+        g["_re"] = re.compile(r"(?<![A-Za-z])" + re.escape(g["en"]) + r"(?:'s|s)?(?![A-Za-z])")
+        g["_low"] = g["en"].lower()
+        g["_w"] = [w for w in re.split(r"[\s/:,]+", g["uk"].lower()) if len(w) >= 3]
+    return gl
+
+
+def soft_flags(r, variants, gl):
+    """Non-blocking hints for QA (never reject on these alone): formal «Ви» outside dialogue, russisms, glossary misses."""
+    out = []
+    txt = " ".join(plain_of(s) for s in variants if s)
+    if r["category"] not in ("conversations", "chatter", "game/codex") and FORMAL_YOU.search(txt):
+        out.append("formal-you")
+    if r["category"] == "quests" and not r["has_gender_variant"] and MASC_PAST.search(txt):
+        out.append("masc-past")             # quest journal has no female variant: no gendered past tense about the player
+    if RUSISM.search(txt):
+        out.append("rusism")
+    en = plain_of(r["en_default"])
+    low, ul = en.lower(), txt.lower()
+    miss = [g["en"] for g in gl if g["_low"] in low and g["_re"].search(en) and not all(w[:max(3, len(w) - 2)] in ul for w in g["_w"])]
+    if miss:
+        out.append("glossary:" + "/".join(miss[:3]))
+    return out
 
 SCHEMA_GLOSSARY = """
 CREATE TABLE IF NOT EXISTS glossary (
@@ -100,12 +155,20 @@ def connect():
 
 
 def group_of(r):
-    return "D11" if r["source_file"] == "D11" else r["category"]
+    if r["source_file"] == "D11":
+        return "D11"
+    c = r["category"]
+    if c == "conversations":
+        return "conv:" + r["table_name"].split("/")[1]
+    return {"quests": "quests", "chatter": "chatter", "game/codex": "codex"}.get(c, c)
+
+
+ALL_PRIORITY = PRIORITY + STORY_PRIORITY
 
 
 def prio(r):
     g = group_of(r)
-    return PRIORITY.index(g) if g in PRIORITY else len(PRIORITY)
+    return ALL_PRIORITY.index(g) if g in ALL_PRIORITY else len(ALL_PRIORITY)
 
 
 def need_flags(r):
@@ -165,6 +228,8 @@ def check_variant(uk, ref, label):
             keys = re.findall(r"(?:^|,\s*)(\w+)=", args)
             if not keys or not set(keys) <= ICU_KEYS or (name == "plural" and not ("one" in keys and ("many" in keys or "other" in keys))):
                 p.append(f"{label}: bad ICU keys {keys} (plural needs one + many/other)")
+    if CTRL.search(uk):
+        p.append(f"{label}: control character U+{ord(CTRL.search(uk).group(0)):04X}")
     if RU_ONLY.search(uk):
         p.append(f"{label}: Russian-only letter {RU_ONLY.search(uk).group(0)!r}")
     if PL_CHARS.search(uk):
@@ -172,8 +237,8 @@ def check_variant(uk, ref, label):
     pl_uk = plain_of(uk)
     if re.search(r"[\"“”„]", pl_uk):
         p.append(f"{label}: use «» instead of straight/curly quotes")
-    if uk.count("\n") != ref.count("\n"):
-        p.append(f"{label}: line breaks {uk.count(chr(10))} != source {ref.count(chr(10))}")
+    if uk.count("\n") + uk.count("\x0b") != ref.count("\n") + ref.count("\x0b"):
+        p.append(f"{label}: line breaks {uk.count(chr(10)) + uk.count(chr(11))} != source {ref.count(chr(10)) + ref.count(chr(11))}")
     if re.search(r"[A-Za-z]{2,}", plain_of(ref)) and not CYR.search(pl_uk):
         p.append(f"{label}: untranslated (no Cyrillic)")
     return p
@@ -209,10 +274,18 @@ def term_regex(en):
     return re.compile(r"(?<![A-Za-z])" + re.escape(en) + r"(?:'s|s|es)?(?![A-Za-z])", re.I)
 
 
-def glossary_subset(gl, texts, limit=80):
+def glossary_subset(gl, texts, limit=170):
+    """Glossary terms occurring in the texts, most frequent in THIS batch first (a low global frequency must not drop a name)."""
     blob = "\n".join(texts)
-    hits = [g for g in gl if term_regex(g["en"]).search(blob)]
-    return [[g["en"], g["uk"], g["uk_female"], g["uk_extra"], g["note"]] for g in hits[:limit]]
+    hits = []
+    for g in gl:
+        if g["en"].lower() not in blob.lower():
+            continue
+        n = len(term_regex(g["en"]).findall(blob))
+        if n:
+            hits.append((-n, -g["freq"], g))
+    hits.sort(key=lambda x: (x[0], x[1], x[2]["en"]))
+    return [[g["en"], g["uk"], g["uk_female"], g["uk_extra"], g["note"]] for _, _, g in hits[:limit]]
 
 
 # =============================================================================================== commands
@@ -220,9 +293,14 @@ def cmd_migrate(a):
     con = connect()
     con.execute("PRAGMA journal_mode=WAL")
     cols = {r[1] for r in con.execute("PRAGMA table_info(strings)")}
-    if "qa_note" not in cols:
-        con.execute("ALTER TABLE strings ADD COLUMN qa_note TEXT NOT NULL DEFAULT ''")
+    for col, ddl in (("qa_note", "TEXT NOT NULL DEFAULT ''"), ("claim_id", "TEXT NOT NULL DEFAULT ''"),
+                     ("claimed_at", "INTEGER NOT NULL DEFAULT 0"), ("attempts", "INTEGER NOT NULL DEFAULT 0")):
+        if col not in cols:
+            con.execute(f"ALTER TABLE strings ADD COLUMN {col} {ddl}")
     con.execute(SCHEMA_GLOSSARY)
+    con.execute("CREATE TABLE IF NOT EXISTS batches (id INTEGER PRIMARY KEY AUTOINCREMENT, worker TEXT, grp TEXT, tbl TEXT, "
+                "n_rows INTEGER, created_at INTEGER)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_strings_queue ON strings(category, status, claim_id)")
     gcols = {r[1] for r in con.execute("PRAGMA table_info(glossary)")}
     for c in ("lore", "source"):
         if c not in gcols:
@@ -233,12 +311,15 @@ def cmd_migrate(a):
     # empty English text (other languages hold only debug placeholders like "[plpl 306 - gui]"): nothing to translate
     n = con.execute(f"""UPDATE strings SET status='skipped', qa_note='empty English source', uk_default='', uk_female='',
                         uk_extra='' WHERE {SCOPE} AND en_default='' AND status IN ('new','draft','needs_fix')""").rowcount
+    tests = con.execute("""UPDATE strings SET status='skipped', qa_note='test conversation' WHERE table_name LIKE 'conversations/test%'
+                           AND status='new'""").rowcount
     for t, u, f, x, kind, note in SEED:
         con.execute("INSERT OR IGNORE INTO glossary(en, uk, uk_female, uk_extra, kind, note) VALUES (?,?,?,?,?,?)",
                     (t, u, f, x, kind, note))
     con.execute("COMMIT")
     g = con.execute("SELECT sum(has_gender_variant) FROM strings").fetchone()[0]
-    print(f"migrated: qa_note+glossary ok; has_gender_variant=1 on {g} rows (female in en|pl|ru); auto-skipped {n} empty rows")
+    print(f"migrated: columns+glossary+batches ok; has_gender_variant=1 on {g} rows (female in en|pl|ru); "
+          f"auto-skipped {n} empty-English rows and {tests} test-conversation rows")
 
 
 def fmt_row(r, with_prev=False):
@@ -305,7 +386,7 @@ def cmd_export(a):
         man = write_batches(rows, Path(a.out), "aud", a.max_rows, a.max_chars, True, glossary_rows(con), mix=True)
         print(f"exported {len(rows)} audit rows in {len(man)} batches -> {a.out}")
         return
-    rows = [r for r in con.execute(f"SELECT * FROM strings WHERE {SCOPE} AND status IN ({','.join('?' * len(st))})", st)]
+    rows = [r for r in con.execute(f"SELECT * FROM strings WHERE {scope_sql(a.scope)} AND status IN ({','.join('?' * len(st))})", st)]
     if a.category:
         rows = [r for r in rows if group_of(r) == a.category]
     man = write_batches(rows, Path(a.out), "fix" if a.fix else "", a.max_rows, a.max_chars, a.fix, glossary_rows(con))
@@ -334,13 +415,25 @@ def cmd_import(a, path=None, verdict=False):
         for r in con.execute(f"SELECT * FROM strings WHERE {SCOPE} AND id IN ({','.join('?' * len(part))})", part):
             rows[r["id"]] = r
     upd, fails, ok, skipped, skipped_rows = [], list(bad), 0, 0, 0
+    m = re.match(r"batch_(b\d+)", path.stem)
+    bid = getattr(a, "batch", None) or (m.group(1) if m else "")
+    gl = proper_glossary(con)
+    foreign = kept_draft = 0
     for o in recs:
         r = rows.get(o["id"])
         if r is None:
             fails.append(f"{o['id']}: unknown id / out of scope")
             continue
+        if r["claim_id"] and r["claim_id"] != bid:      # one row is edited by one batch only
+            foreign += 1
+            fails.append(f"{o['id']}: claimed by another batch ({r['claim_id']}); not imported")
+            continue
         if r["status"] == "reviewed" and not getattr(a, "force", False) and not verdict:
             skipped += 1
+            continue
+        if (r["status"] == "draft" and r["category"] in STORY_CATS and r["claim_id"] != bid and bid
+                and not getattr(a, "force", False)):    # finished story rows are not overwritten by a stray re-import
+            kept_draft += 1
             continue
         if r["status"] == "skipped":
             skipped_rows += 1                # nothing to translate: ignored silently
@@ -350,15 +443,18 @@ def cmd_import(a, path=None, verdict=False):
             upd.append((uk, uf, ux, "needs_fix", "; ".join(probs)[:400], o["id"]))
             fails.append(f"{o['id']}: " + "; ".join(probs)[:230])
         else:
-            upd.append((uk, uf, ux, "reviewed" if verdict else "draft", "kept as source" if o.get("keep") else "", o["id"]))
+            fixed_flag = r["status"] == "needs_fix" and r["qa_note"].startswith("flag:")   # fixer has looked at the flag
+            flags = [] if (o.get("keep") or fixed_flag) else soft_flags(r, (uk, uf, ux), gl)
+            note = "kept as source" if o.get("keep") else ("flag:" + ",".join(flags) if flags else "")
+            upd.append((uk, uf, ux, "reviewed" if verdict else "draft", note, o["id"]))
             ok += 1
     con.execute("BEGIN IMMEDIATE")
-    con.executemany("UPDATE strings SET uk_default=?, uk_female=?, uk_extra=?, status=?, qa_note=? WHERE id=?", upd)
+    con.executemany("UPDATE strings SET uk_default=?, uk_female=?, uk_extra=?, status=?, qa_note=?, claim_id='', claimed_at=0 WHERE id=?", upd)
     con.execute("COMMIT")
     (LOGS / "import").mkdir(parents=True, exist_ok=True)
     (LOGS / "import" / f"{path.stem}.fail.txt").write_text("\n".join(fails), encoding="utf-8")
     print(f"{path.name}: {len(recs)} lines -> ok {ok}, needs_fix {len(upd) - ok}, rejected {len(fails) - (len(upd) - ok)}, "
-          f"kept-reviewed {skipped}, ignored-empty-source {skipped_rows}")
+          f"kept-reviewed {skipped}, kept-draft {kept_draft}, ignored-empty-source {skipped_rows}, foreign-claim {foreign}")
     for f in fails[:14]:
         print("  FIX", f)
     if len(fails) > 14:
@@ -389,20 +485,21 @@ def cmd_validate(a):
 def cmd_stats(a):
     con = connect()
     agg = collections.defaultdict(collections.Counter)
-    for r in con.execute(f"SELECT source_file, category, status, uk_default FROM strings WHERE {SCOPE}"):
-        g = "D11" if r["source_file"] == "D11" else r["category"]
+    flagged = collections.Counter()
+    for r in con.execute(f"SELECT source_file, category, table_name, status, qa_note FROM strings WHERE {scope_sql(a.scope)}"):
+        g = group_of(r)
         agg[g][r["status"]] += 1
-    print(f"{'category':<22}{'total':>6}{'draft':>7}{'review':>7}{'needsfx':>8}{'skipped':>8}{'new':>6}")
+        flagged[g] += r["qa_note"].startswith("flag:")
+    print(f"{'group':<26}{'total':>6}{'draft':>7}{'review':>7}{'needsfx':>8}{'skipped':>8}{'new':>6}{'flagged':>8}")
     tot = collections.Counter()
-    for g in PRIORITY:
-        c = agg.get(g)
-        if not c:
-            continue
+    order = [g for g in ALL_PRIORITY if g in agg] + sorted(g for g in agg if g not in ALL_PRIORITY)
+    for g in order:
+        c = agg[g]
         tot.update(c)
-        print(f"{g:<22}{sum(c.values()):>6}{c['draft']:>7}{c['reviewed']:>7}{c['needs_fix']:>8}{c['skipped']:>8}{c['new']:>6}")
+        print(f"{g:<26}{sum(c.values()):>6}{c['draft']:>7}{c['reviewed']:>7}{c['needs_fix']:>8}{c['skipped']:>8}{c['new']:>6}{flagged[g]:>8}")
     n = sum(tot.values())
     done = tot["draft"] + tot["reviewed"]
-    print(f"{'TOTAL':<22}{n:>6}{tot['draft']:>7}{tot['reviewed']:>7}{tot['needs_fix']:>8}{tot['skipped']:>8}{tot['new']:>6}"
+    print(f"{'TOTAL':<26}{n:>6}{tot['draft']:>7}{tot['reviewed']:>7}{tot['needs_fix']:>8}{tot['skipped']:>8}{tot['new']:>6}"
           f"   translated {done}/{n - tot['skipped']} = {100 * done / max(1, n - tot['skipped']):.1f}%")
 
 
@@ -413,13 +510,25 @@ def cmd_sample(a):
     excl = set()
     if a.exclude_file:
         excl = {int(x.split("\t")[0]) for x in Path(a.exclude_file).read_text(encoding="utf-8").splitlines() if x.split("\t")[0].isdigit()}
-    for r in con.execute(f"SELECT * FROM strings WHERE {SCOPE} AND status='draft' AND qa_note!='kept as source'"):
-        if r["id"] not in excl:
+    want = set(a.groups.split(",")) if a.groups else None
+    for r in con.execute(f"SELECT * FROM strings WHERE {scope_sql(a.scope)} AND status='draft' AND qa_note!='kept as source'"):
+        if r["id"] not in excl and (want is None or group_of(r) in want):
             by[group_of(r)].append(r)
     pick = []
+    if a.tables_file:                                    # 100% review of the listed (problem) tables
+        tabs = {x.strip() for x in Path(a.tables_file).read_text(encoding="utf-8").splitlines() if x.strip()}
+        by = {g: [r for r in rs if r["table_name"] in tabs] for g, rs in by.items()}
+        pick = [r for rs in by.values() for r in rs]
+        by = {}
     for g, rs in by.items():
         k = min(len(rs), max(3, round(len(rs) * a.pct / 100)))
-        pick += rnd.sample(rs, k)
+        fl = [r for r in rs if r["qa_note"].startswith("flag:")]
+        if a.flagged and fl:                      # soft-flagged rows first (up to half of the quota)
+            first = rnd.sample(fl, min(len(fl), k // 2))
+            ids = {r["id"] for r in first}
+            pick += first + rnd.sample([r for r in rs if r["id"] not in ids], k - len(first))
+        else:
+            pick += rnd.sample(rs, k)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     gl = glossary_rows(con)
@@ -429,7 +538,20 @@ def cmd_sample(a):
         b = pick[i:i + a.size]
         texts = [t for r in b for t in (r["en_default"], r["en_female"], r["en_extra"])]
         head = {"batch": f"Q{n + 1:02d}", "rows": len(b), "glossary": glossary_subset(gl, texts)}
-        lines = [json.dumps(head, ensure_ascii=False)] + [json.dumps(fmt_row(r, True), ensure_ascii=False) for r in b]
+        if a.scope != "ui":                       # voice profiles of the scenes in this file (docs/voices.md)
+            import batch_worker as W
+            head["voices"] = W.voices_for(sorted({r["table_name"] for r in b}), W.load_voices())
+        rows_out = []
+        for r in b:
+            o = fmt_row(r, True)
+            if a.scope != "ui":                   # preceding line of the same table for dialogue/quest context (read-only)
+                pv = con.execute("SELECT en_default, uk_default FROM strings WHERE source_file=? AND table_name=? AND string_id<? "
+                                 "ORDER BY string_id DESC LIMIT 1", (r["source_file"], r["table_name"], r["string_id"])).fetchone()
+                if pv:
+                    o["prev"] = [pv[0][:160], pv[1][:160]]
+                o["t"] = r["table_name"].split("/", 1)[-1][-48:]
+            rows_out.append(json.dumps(o, ensure_ascii=False))
+        lines = [json.dumps(head, ensure_ascii=False)] + rows_out
         (out / f"Q{n + 1:02d}.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
         n += 1
     print(f"QA sample: {len(pick)} rows ({100 * len(pick) / max(1, sum(len(v) for v in by.values())):.1f}% of draft) in {n} files -> {out}")
@@ -465,7 +587,85 @@ def cmd_review(a):
         con.execute("UPDATE strings SET status='needs_fix', qa_note=? WHERE id=?", (note, r["id"]))
         bad.append(int(o["id"]))
     con.execute("COMMIT")
-    print(f"review {Path(a.file).name}: reviewed ok {len(ok_ids)}, rejected {len(bad)}")
+    rej_ids = [int(o["id"]) for o in recs if not o.get("ok")]
+    allv = {i: 1 for i in ok_ids}
+    allv.update({i: 0 for i in rej_ids})
+    log = []
+    for i in range(0, len(allv), 500):
+        part = list(allv)[i:i + 500]
+        for r in con.execute(f"SELECT id, source_file, category, table_name FROM strings WHERE id IN ({','.join('?' * len(part))})", part):
+            log.append(f"{r['id']}\t{group_of(r)}\t{r['table_name']}\t{allv[r['id']]}")
+    (LOGS / "qa").mkdir(parents=True, exist_ok=True)
+    with open(LOGS / "qa" / "verdicts.tsv", "a", encoding="utf-8") as fh:
+        fh.write("\n".join(log) + ("\n" if log else ""))
+    print(f"review {Path(a.file).name}: reviewed ok {len(ok_ids)}, rejected {len(rej_ids)} (not fixable: {len(bad)})")
+
+
+def cmd_reflag(a):
+    """Recompute soft flags of all draft rows (after the flag rules or the glossary changed)."""
+    con = connect()
+    gl = proper_glossary(con)
+    upd = []
+    for r in con.execute(f"SELECT * FROM strings WHERE {scope_sql(a.scope)} AND status='draft' AND uk_default!=''"):
+        if r["qa_note"] in ("kept as source", "glossary"):
+            continue
+        fl = soft_flags(r, (r["uk_default"], r["uk_female"], r["uk_extra"]), gl)
+        note = ("flag:" + ",".join(fl)) if fl else ""
+        if note != r["qa_note"]:
+            upd.append((note, r["id"]))
+    con.execute("BEGIN IMMEDIATE")
+    con.executemany("UPDATE strings SET qa_note=? WHERE id=?", upd)
+    con.execute("COMMIT")
+    c = collections.Counter(k.split(":")[0] for (n, _) in upd for k in n[5:].split(",") if n)
+    print(f"reflag: {len(upd)} rows changed; flags set: {dict(c)}")
+
+
+def cmd_flag_to_fix(a):
+    """draft rows carrying the given soft flags -> needs_fix (note keeps the flag) so that `batch_worker claim --fix` serves them."""
+    con = connect()
+    kinds = tuple(a.kinds.split(","))
+    want = set(a.groups.split(",")) if a.groups else None
+    star = a.kinds == "*"                         # every draft row of the groups (systematically defective tables)
+    cond = "" if star else " AND qa_note LIKE 'flag:%'"
+    ids = [r["id"] for r in con.execute(f"SELECT * FROM strings WHERE {scope_sql(a.scope)} AND status='draft'{cond}")
+           if (want is None or group_of(r) in want) and r["qa_note"] != "kept as source"
+           and (star or any(k in r["qa_note"] for k in kinds))]
+    con.execute("BEGIN IMMEDIATE")
+    for i in range(0, len(ids), 500):
+        part = ids[i:i + 500]
+        if a.note:
+            con.execute(f"UPDATE strings SET status='needs_fix', qa_note=? WHERE id IN ({','.join('?' * len(part))})", [a.note] + part)
+        else:
+            con.execute(f"UPDATE strings SET status='needs_fix' WHERE id IN ({','.join('?' * len(part))})", part)
+    con.execute("COMMIT")
+    print(f"flag-to-fix: {len(ids)} rows marked needs_fix (kinds {kinds})")
+
+
+def cmd_qa_report(a):
+    """Defect rate per group and per table from logs/qa/verdicts.tsv; tables above the threshold -> logs/qa/problem_tables.txt."""
+    p = LOGS / "qa" / "verdicts.tsv"
+    seen = {}
+    for ln in p.read_text(encoding="utf-8").splitlines():
+        f = ln.split("\t")
+        if len(f) == 4:
+            seen[int(f[0])] = (f[1], f[2], int(f[3]))          # last verdict per id wins
+    g, t = collections.defaultdict(lambda: [0, 0]), collections.defaultdict(lambda: [0, 0])
+    for grp, tab, ok in seen.values():
+        g[grp][0] += 1
+        g[grp][1] += 1 - ok
+        t[tab][0] += 1
+        t[tab][1] += 1 - ok
+    print(f"{'group':<26}{'reviewed':>9}{'rejected':>9}{'rate':>7}")
+    tot = [0, 0]
+    for grp in [x for x in ALL_PRIORITY if x in g] + sorted(x for x in g if x not in ALL_PRIORITY):
+        n, bad = g[grp]
+        tot[0] += n
+        tot[1] += bad
+        print(f"{grp:<26}{n:>9}{bad:>9}{100 * bad / n:>6.1f}%")
+    print(f"{'TOTAL':<26}{tot[0]:>9}{tot[1]:>9}{100 * tot[1] / max(1, tot[0]):>6.1f}%")
+    prob = sorted(tab for tab, (n, bad) in t.items() if n >= a.min_n and bad / n >= a.min_rate)
+    (LOGS / "qa" / "problem_tables.txt").write_text("\n".join(prob), encoding="utf-8")
+    print(f"problem tables (>= {a.min_n} reviewed rows, defect rate >= {a.min_rate:.0%}): {len(prob)} -> logs/qa/problem_tables.txt")
 
 
 # ---------------------------------------------------------------------------------------------- glossary
@@ -637,19 +837,36 @@ def main():
     e.add_argument("--statuses", default="new")
     e.add_argument("--category")
     e.add_argument("--ids-file", help="TSV worklist (id, term, uk): export those rows with previous translation + note")
+    e.add_argument("--scope", choices=("ui", "story", "all"), default="ui")
     e.add_argument("--out", default=str(LOGS / "batches" / "in"))
     e.add_argument("--max-rows", type=int, default=220)
     e.add_argument("--max-chars", type=int, default=24000)
     i = sub.add_parser("import")
     i.add_argument("file")
     i.add_argument("--force", action="store_true")
+    i.add_argument("--batch", help="batch id (default: from file name batch_<id>.jsonl)")
     sub.add_parser("validate")
-    sub.add_parser("stats")
+    st_ = sub.add_parser("stats")
+    st_.add_argument("--scope", choices=("ui", "story", "all"), default="story")
     s = sub.add_parser("sample")
     s.add_argument("--pct", type=float, default=2.5)
     s.add_argument("--size", type=int, default=120)
     s.add_argument("--seed", type=int, default=7)
     s.add_argument("--exclude-file", help="TSV whose first column holds ids to leave out of the sample")
+    s.add_argument("--scope", choices=("ui", "story", "all"), default="ui")
+    s.add_argument("--groups", help="comma separated groups (D11, game/gui, quests, chatter, codex, conv:companions ...)")
+    s.add_argument("--flagged", action="store_true", help="soft-flagged rows take up to half of the quota")
+    s.add_argument("--tables-file", help="review ALL draft rows of the tables listed in this file (problem tables)")
+    rf = sub.add_parser("reflag")
+    rf.add_argument("--scope", choices=("ui", "story", "all"), default="all")
+    ff = sub.add_parser("flag-to-fix")
+    ff.add_argument("--kinds", required=True, help="comma separated: glossary,masc-past,formal-you,rusism")
+    ff.add_argument("--groups")
+    ff.add_argument("--note", help="qa_note stored with the rows (shown to the fixer); kinds '*' = all draft rows of the groups")
+    ff.add_argument("--scope", choices=("ui", "story", "all"), default="story")
+    qr = sub.add_parser("qa-report")
+    qr.add_argument("--min-n", type=int, default=3)
+    qr.add_argument("--min-rate", type=float, default=0.25)
     s.add_argument("--out", default=str(LOGS / "qa" / "in"))
     rv = sub.add_parser("review")
     rv.add_argument("file")
@@ -665,7 +882,8 @@ def main():
         sys.stdout.reconfigure(encoding="utf-8")
     {"migrate": cmd_migrate, "export": cmd_export, "import": cmd_import, "validate": cmd_validate, "stats": cmd_stats,
      "sample": cmd_sample, "review": cmd_review, "candidates": cmd_candidates, "glossary-import": cmd_glossary_import,
-     "glossary-md": cmd_glossary_md, "apply-glossary": cmd_apply_glossary, "audit-glossary": cmd_audit}[a.cmd](a)
+     "glossary-md": cmd_glossary_md, "apply-glossary": cmd_apply_glossary, "audit-glossary": cmd_audit,
+     "qa-report": cmd_qa_report, "reflag": cmd_reflag, "flag-to-fix": cmd_flag_to_fix}[a.cmd](a)
 
 
 if __name__ == "__main__":
