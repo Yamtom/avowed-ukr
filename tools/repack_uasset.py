@@ -307,7 +307,9 @@ def rebuild_asset(template: bytes, resolver, template_lang="pl", links_of=None, 
 def load_rows(db_path, source):
     """-> {(table_name, string_id): 12-tuple (en|pl|ru|uk) x (default, female, extra)}"""
     con = sqlite3.connect(f"file:{Path(db_path).as_posix()}?mode=ro", uri=True)
-    cols = ", ".join(f"{lg}_{f}" for lg in TEXT_LANGS for f in FIELDS)
+    # Ukrainian text ships only for rows that passed validation (draft/reviewed); needs_fix / new rows must never reach the game
+    cols = ", ".join((f"CASE WHEN status IN ('draft','reviewed') THEN {lg}_{f} ELSE '' END" if lg == "uk" else f"{lg}_{f}")
+                     for lg in TEXT_LANGS for f in FIELDS)
     rows = {(t, k): tuple(v) for t, k, *v in
             con.execute(f"SELECT table_name, string_id, {cols} FROM strings WHERE source_file=?", (source,))}
     con.close()
