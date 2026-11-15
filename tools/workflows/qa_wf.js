@@ -3,7 +3,7 @@ export const meta = {
   description: 'QA of the Ukrainian translation: 2 editors review a stratified 2.7% sample; 1 agent resolves the glossary-audit worklist',
   phases: [{ title: 'QA', detail: 'sample reviews + glossary audit fixes, all via tools/batch_io.py' }],
 }
-const ROOT = 'D:/Xbox/avowed-ukr/.claude/worktrees/avowed-ukrainian-localization-20b324'
+const ROOT = 'D:/Xbox/avowed-ukr'
 const R_SCHEMA = { type: 'object', properties: { batch: { type: 'string' }, reviewed: { type: 'number' }, ok: { type: 'number' }, fixed: { type: 'number' }, unfixed: { type: 'number' }, issues: { type: 'string' } }, required: ['batch', 'reviewed', 'ok'] }
 const review = (q) => `You are a senior English->Ukrainian game-localization editor reviewing a translation of the RPG Avowed. Repo root: ${ROOT} (absolute paths only).
 1. Read ${ROOT}/docs/style_uk.md (binding style rules).
