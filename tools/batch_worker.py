@@ -160,7 +160,7 @@ def cmd_claim(a):
     # valid JSON, but one row per line so that the translator can Read it in chunks
     head = json.dumps({k: v for k, v in batch.items() if k != "rows"}, ensure_ascii=False, separators=(",", ":"))
     body = ",\n".join(json.dumps(r, ensure_ascii=False, separators=(",", ":")) for r in rows)
-    f.write_text(head[:-1] + ',"rows":[\n' + body + "\n]}", encoding="utf-2" if False else "utf-8") # preserving exact encoding string
+    f.write_text(head[:-1] + ',"rows":[\n' + body + "\n]}", encoding="utf-8")
     left = con.execute(f"SELECT COUNT(*) FROM strings WHERE {B.group_where(group)}{extra} AND status=? AND claim_id=''", (status,)).fetchone()[0]
     print(json.dumps({"batch": bid, "file": str(f), "out": str(SCRATCH / "out" / f"batch_{bid}.jsonl"), "group": group,
                       "rows": len(rows), "tables": len(tables), "left_in_group": left}))
