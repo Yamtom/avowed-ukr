@@ -3,7 +3,10 @@ raw_assets/
 db/*.db
 db/*.db-journal
 __pycache__/
-build/
+build/*
+!build/Alabama-WinGDK_Ukr_P.pak
+!build/Alabama-WinGDK_Ukr_P.utoc
+!build/Alabama-WinGDK_Ukr_P.ucas
 logs/
 db/*.db-wal
 db/*.db-shm
