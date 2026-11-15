@@ -174,6 +174,40 @@ def cmd_done(a):
     print(f"released {n} unfinished rows of {a.batch}")
 
 
+def cmd_reap(a):
+    """After a broken session: import every answer file (batch_<id>.jsonl, then _fix1.._fixN) of batches that still hold
+    claims, then (--release) free the claims of dead batches so their rows return to the queue (attempt not counted).
+    Run only when no translator is working (or with --older-than SECONDS to touch only old claims)."""
+    import contextlib
+    import io
+    con = B.connect()
+    lim = int(time.time()) - (a.older_than or 0)
+    bids = sorted(r[0] for r in con.execute("SELECT DISTINCT claim_id FROM strings WHERE claim_id!='' AND claimed_at<=?", (lim,)))
+    if a.worker:                       # only the batches of one (crashed) worker
+        mine = {f"b{r[0]:05d}" for r in con.execute("SELECT id FROM batches WHERE worker=?", (a.worker,))}
+        bids = [b for b in bids if b in mine]
+    files = ok = fails = 0
+    for bid in bids:
+        fs = sorted((SCRATCH / "out").glob(f"batch_{bid}*.jsonl"), key=lambda p: (len(p.stem), p.stem))
+        for f in fs:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                o, n = B.cmd_import(argparse.Namespace(file=str(f), batch=bid, force=False), str(f))
+            files += 1
+            ok += o
+            fails += n
+    released = 0
+    if a.release and bids:
+        con.execute("BEGIN IMMEDIATE")
+        for i in range(0, len(bids), 400):
+            part = bids[i:i + 400]
+            released += con.execute(f"UPDATE strings SET claim_id='', claimed_at=0, attempts=MAX(attempts-1,0) "
+                                    f"WHERE claim_id IN ({','.join('?' * len(part))})", part).rowcount
+        con.execute("COMMIT")
+    print(f"reap: {len(bids)} claimed batches, {files} answer files imported (ok {ok}, rejected/needs_fix {fails}), "
+          f"released {released} rows")
+
+
 def cmd_plan(a):
     con = B.connect()
     groups = B.STORY_PRIORITY if a.scope == "story" else B.PRIORITY
@@ -231,6 +265,10 @@ def main():
     c.add_argument("--max-attempts", type=int)
     d = sub.add_parser("done")
     d.add_argument("--batch", required=True)
+    rp = sub.add_parser("reap")
+    rp.add_argument("--release", action="store_true")
+    rp.add_argument("--older-than", type=int, default=0)
+    rp.add_argument("--worker")
     p = sub.add_parser("plan")
     p.add_argument("--scope", choices=("story", "ui"), default="story")
     k = sub.add_parser("peek")
@@ -244,7 +282,7 @@ def main():
     a = ap.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
-    {"claim": cmd_claim, "done": cmd_done, "plan": cmd_plan, "peek": cmd_peek, "tables": cmd_tables}[a.cmd](a)
+    {"claim": cmd_claim, "done": cmd_done, "reap": cmd_reap, "plan": cmd_plan, "peek": cmd_peek, "tables": cmd_tables}[a.cmd](a)
 
 
 if __name__ == "__main__":
