@@ -105,6 +105,8 @@ def soft_flags(r, variants, gl):
         out.append("masc-past")             # quest journal has no female variant: no gendered past tense about the player
     if RUSISM.search(txt):
         out.append("rusism")
+    if len(variants) > 2 and variants[2] and FORMAL_YOU.search(plain_of(variants[2])) and not FORMAL_YOU.search(plain_of(variants[0])):
+        out.append("ux-formal")             # neutral variant must keep the ти of uk (QA, Galawain's Tusks)
     en = plain_of(r["en_default"])
     low, ul = en.lower(), txt.lower()
     miss = [g["en"] for g in gl if g["_low"] in low and g["_re"].search(en) and not all(w[:max(3, len(w) - 2)] in ul for w in g["_w"])]
@@ -199,6 +201,8 @@ def normalize(uk, ref):
         p = parts[i]
         for bad in (" -- ", " - ", " – "):
             p = p.replace(bad, " — ")
+        if "…" not in ref:
+            p = p.replace("…", "...")          # keep the source's three dots (QA: technical defect)
         parts[i] = p
     s = "".join(parts)
     lead = ref[:len(ref) - len(ref.lstrip())]
@@ -471,6 +475,7 @@ def cmd_import(a, path=None, verdict=False):
 def cmd_validate(a):
     con = connect()
     upd, nfix = [], 0
+    con.execute("BEGIN IMMEDIATE")          # read under the write lock: no race with parallel imports
     for r in con.execute(f"SELECT * FROM strings WHERE {SCOPE} AND uk_default!='' AND status!='skipped'"):
         if r["qa_note"] == "kept as source":
             continue
@@ -478,11 +483,10 @@ def cmd_validate(a):
         if probs:
             nfix += 1
             upd.append((uk, uf, ux, "needs_fix", "; ".join(probs)[:400], r["id"]))
-        elif r["status"] == "needs_fix":
+        elif r["status"] == "needs_fix" and not r["qa_note"].startswith(("flag:", "QA")):   # QA/flag verdicts stay open
             upd.append((uk, uf, ux, "draft", "", r["id"]))
         elif (uk, uf, ux) != (r["uk_default"], r["uk_female"], r["uk_extra"]):
             upd.append((uk, uf, ux, r["status"], r["qa_note"], r["id"]))
-    con.execute("BEGIN IMMEDIATE")
     con.executemany("UPDATE strings SET uk_default=?, uk_female=?, uk_extra=?, status=?, qa_note=? WHERE id=?", upd)
     con.execute("COMMIT")
     print(f"validate: {len(upd)} rows updated, {nfix} failing")

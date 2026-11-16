@@ -33,6 +33,8 @@ Repeat CYCLES times:
      Natural spoken Ukrainian in each character's register.
 4. **Import**: `python R/tools/batch_io.py import <out file>` → prints `FIX <id>: <reason>`. Put ONLY the corrected rows into
    `R/scratch/batches/out/batch_<id>_fix1.jsonl` and import it; if still FIX, one more round as `_fix2.jsonl`. Max 2 rounds.
+   To correct rows of YOUR batch that already imported ok (own typo found later), write them to `batch_<id>_fixN.jsonl` and
+   import with `--force` (a plain import keeps finished story rows: "kept-draft"). Never force ids of other batches.
 5. **Release** leftovers: `python R/tools/batch_worker.py done --batch <id>`.
 
 Final answer: ONE line — worker, batches done, rows claimed, ok, needs_fix left, any tool error. Never paste translations.
