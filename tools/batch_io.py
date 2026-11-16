@@ -37,6 +37,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 DB = REPO / "db" / "avowed_l10n.db"
+if not DB.exists():   # git worktree (.claude/worktrees/<name>): the DB is git-ignored and lives only in the main checkout
+    DB = next((p / "db" / "avowed_l10n.db" for p in REPO.parents if (p / "db" / "avowed_l10n.db").exists()), DB)
 LOGS = REPO / "logs"
 DOCS = REPO / "docs"
 SCOPE_UI = "(source_file='D11' OR (category LIKE 'game/%' AND category!='game/codex'))"
@@ -80,6 +82,7 @@ CTRL = re.compile("[\x00-\x08\x0c\x0e-\x1f\x7f  ]")      # \x0b (vertical ta
 FORMAL_YOU = re.compile(r"\b(?:[Вв]и|[Вв]ас|[Вв]ам|[Вв]ами|[Вв]аш\w*)\b")
 MASC_PAST = re.compile(r"\b[Тт]и\s+(?:не\s+|вже\s+|ще\s+|лише\s+|одразу\s+)?\w*(?:[аеиіоуяє]в|шов|ів)\b")
 RUSISM = re.compile(r"призива|являєтьс|слідуюч|прийма\w* участь|на протязі|в залежності від|відноситьс|стараюс|стараєш|скоріше|прямо\s+як|берегись|проявляєтьс", re.I)
+EN_STOP = re.compile(r"\b(?:the|you|your|and|to|of|is|are|was|it|this|that|with|for|have|we|not|what|my)\b", re.I)
 PROPER_KINDS = ("place", "person", "deity", "faction", "creature", "title")
 
 
@@ -248,7 +251,10 @@ def check_row(r, uk, uf, ux, keep=False):
     """-> (normalized (uk, uf, ux), [problems])"""
     refs = {v: ref_text(r, v) for v in "dfx"}
     if keep:
-        return (r["en_default"] or r["pl_default"], r["en_female"], r["en_extra"]), []
+        kept = (r["en_default"] or r["pl_default"], r["en_female"], r["en_extra"])
+        if len(EN_STOP.findall(plain_of(kept[0]))) >= 2:          # names/codes/sounds only, never English prose
+            return kept, ["keep: source is English prose - translate it"]
+        return kept, []
     out, probs = [], []
     for v, s in (("d", uk), ("f", uf), ("x", ux)):
         s = normalize(s, refs[v]) if s and s.strip() else ""
