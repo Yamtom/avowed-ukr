@@ -585,9 +585,9 @@ def cmd_review(a):
         note = ("QA: " + str(o.get("issue", ""))[:300]) if o.get("issue") else "QA: rejected"
         if o.get("uk"):
             (uk, uf, ux), probs = check_row(r, o["uk"], o.get("uf", r["uk_female"]), o.get("ux", r["uk_extra"]))
-            if not probs:
-                con.execute("UPDATE strings SET uk_default=?, uk_female=?, uk_extra=?, status='reviewed', qa_note='' WHERE id=?",
-                            (uk, uf, ux, r["id"]))
+            if not probs:            # keep the defect class in qa_note for QA statistics (critical/semantic/stylistic/technical)
+                con.execute("UPDATE strings SET uk_default=?, uk_female=?, uk_extra=?, status='reviewed', qa_note=? WHERE id=?",
+                            (uk, uf, ux, f"QA-fixed[{o.get('cls', '?')}]: {str(o.get('issue', ''))[:200]}", r["id"]))
                 continue
             note += " | fix rejected: " + "; ".join(probs)[:150]
         con.execute("UPDATE strings SET status='needs_fix', qa_note=? WHERE id=?", (note, r["id"]))
