@@ -3,7 +3,7 @@ export const meta = {
   description: 'EN->UK translation of exported batches by parallel sub-agents; every agent writes only through tools/batch_io.py import (auto-validation)',
   phases: [{ title: 'Translate', detail: 'one agent per batch, validation loop inside the agent' }],
 }
-const ROOT = 'D:/Xbox/avowed-ukr/.claude/worktrees/avowed-ukrainian-localization-20b324'
+const ROOT = 'D:/Xbox/avowed-ukr'
 const catOf = (n) => (n.includes('D11') ? 'D11' : n.slice(4).replace('-', '/'))
 const batches = args.batches || args.names.map(n => ({ batch: n, category: catOf(n) }))
 const fix = !!args.fix

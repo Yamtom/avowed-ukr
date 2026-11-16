@@ -37,6 +37,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 DB = REPO / "db" / "avowed_l10n.db"
+if not DB.exists():   # git worktree (.claude/worktrees/<name>): the DB is git-ignored and lives only in the main checkout
+    DB = next((p / "db" / "avowed_l10n.db" for p in REPO.parents if (p / "db" / "avowed_l10n.db").exists()), DB)
 LOGS = REPO / "logs"
 DOCS = REPO / "docs"
 SCOPE_UI = "(source_file='D11' OR (category LIKE 'game/%' AND category!='game/codex'))"
@@ -80,6 +82,7 @@ CTRL = re.compile("[\x00-\x08\x0c\x0e-\x1f\x7f  ]")      # \x0b (vertical ta
 FORMAL_YOU = re.compile(r"\b(?:[Вв]и|[Вв]ас|[Вв]ам|[Вв]ами|[Вв]аш\w*)\b")
 MASC_PAST = re.compile(r"\b[Тт]и\s+(?:не\s+|вже\s+|ще\s+|лише\s+|одразу\s+)?\w*(?:[аеиіоуяє]в|шов|ів)\b")
 RUSISM = re.compile(r"призива|являєтьс|слідуюч|прийма\w* участь|на протязі|в залежності від|відноситьс|стараюс|стараєш|скоріше|прямо\s+як|берегись|проявляєтьс", re.I)
+EN_STOP = re.compile(r"\b(?:the|you|your|and|to|of|is|are|was|it|this|that|with|for|have|we|not|what|my)\b", re.I)
 PROPER_KINDS = ("place", "person", "deity", "faction", "creature", "title")
 
 
@@ -102,6 +105,8 @@ def soft_flags(r, variants, gl):
         out.append("masc-past")             # quest journal has no female variant: no gendered past tense about the player
     if RUSISM.search(txt):
         out.append("rusism")
+    if len(variants) > 2 and variants[2] and FORMAL_YOU.search(plain_of(variants[2])) and not FORMAL_YOU.search(plain_of(variants[0])):
+        out.append("ux-formal")             # neutral variant must keep the ти of uk (QA, Galawain's Tusks)
     en = plain_of(r["en_default"])
     low, ul = en.lower(), txt.lower()
     miss = [g["en"] for g in gl if g["_low"] in low and g["_re"].search(en) and not all(w[:max(3, len(w) - 2)] in ul for w in g["_w"])]
@@ -196,6 +201,8 @@ def normalize(uk, ref):
         p = parts[i]
         for bad in (" -- ", " - ", " – "):
             p = p.replace(bad, " — ")
+        if "…" not in ref:
+            p = p.replace("…", "...")          # keep the source's three dots (QA: technical defect)
         parts[i] = p
     s = "".join(parts)
     lead = ref[:len(ref) - len(ref.lstrip())]
@@ -248,7 +255,10 @@ def check_row(r, uk, uf, ux, keep=False):
     """-> (normalized (uk, uf, ux), [problems])"""
     refs = {v: ref_text(r, v) for v in "dfx"}
     if keep:
-        return (r["en_default"] or r["pl_default"], r["en_female"], r["en_extra"]), []
+        kept = (r["en_default"] or r["pl_default"], r["en_female"], r["en_extra"])
+        if len(EN_STOP.findall(plain_of(kept[0]))) >= 2:          # names/codes/sounds only, never English prose
+            return kept, ["keep: source is English prose - translate it"]
+        return kept, []
     out, probs = [], []
     for v, s in (("d", uk), ("f", uf), ("x", ux)):
         s = normalize(s, refs[v]) if s and s.strip() else ""
@@ -465,6 +475,7 @@ def cmd_import(a, path=None, verdict=False):
 def cmd_validate(a):
     con = connect()
     upd, nfix = [], 0
+    con.execute("BEGIN IMMEDIATE")          # read under the write lock: no race with parallel imports
     for r in con.execute(f"SELECT * FROM strings WHERE {SCOPE} AND uk_default!='' AND status!='skipped'"):
         if r["qa_note"] == "kept as source":
             continue
@@ -472,11 +483,10 @@ def cmd_validate(a):
         if probs:
             nfix += 1
             upd.append((uk, uf, ux, "needs_fix", "; ".join(probs)[:400], r["id"]))
-        elif r["status"] == "needs_fix":
+        elif r["status"] == "needs_fix" and not r["qa_note"].startswith(("flag:", "QA")):   # QA/flag verdicts stay open
             upd.append((uk, uf, ux, "draft", "", r["id"]))
         elif (uk, uf, ux) != (r["uk_default"], r["uk_female"], r["uk_extra"]):
             upd.append((uk, uf, ux, r["status"], r["qa_note"], r["id"]))
-    con.execute("BEGIN IMMEDIATE")
     con.executemany("UPDATE strings SET uk_default=?, uk_female=?, uk_extra=?, status=?, qa_note=? WHERE id=?", upd)
     con.execute("COMMIT")
     print(f"validate: {len(upd)} rows updated, {nfix} failing")
@@ -579,9 +589,9 @@ def cmd_review(a):
         note = ("QA: " + str(o.get("issue", ""))[:300]) if o.get("issue") else "QA: rejected"
         if o.get("uk"):
             (uk, uf, ux), probs = check_row(r, o["uk"], o.get("uf", r["uk_female"]), o.get("ux", r["uk_extra"]))
-            if not probs:
-                con.execute("UPDATE strings SET uk_default=?, uk_female=?, uk_extra=?, status='reviewed', qa_note='' WHERE id=?",
-                            (uk, uf, ux, r["id"]))
+            if not probs:            # keep the defect class in qa_note for QA statistics (critical/semantic/stylistic/technical)
+                con.execute("UPDATE strings SET uk_default=?, uk_female=?, uk_extra=?, status='reviewed', qa_note=? WHERE id=?",
+                            (uk, uf, ux, f"QA-fixed[{o.get('cls', '?')}]: {str(o.get('issue', ''))[:200]}", r["id"]))
                 continue
             note += " | fix rejected: " + "; ".join(probs)[:150]
         con.execute("UPDATE strings SET status='needs_fix', qa_note=? WHERE id=?", (note, r["id"]))
@@ -761,6 +771,7 @@ def cmd_glossary_md(a):
     lines = ["# Глосарій Avowed (Eora) — українські відповідники", "",
              "Джерело істини — таблиця `glossary` в `db/avowed_l10n.db`; цей файл генерує `python tools/batch_io.py glossary-md`.",
              "Один термін = один переклад в усіх категоріях. Форми: чол. / жін. / нейтр. (`uk_extra`) — лише для термінів з гендерними варіантами.",
+             "Принципи вибору відповідників (переклад значущих назв, транслітерація вигаданих мов, питомі слова) — `docs/style_uk.md` §8.",
              "Заголовок розділу = тип сутності (`kind`). «Правило» (`note`) — відмінювання, рід, написання, перехресні посилання: єдине, що отримують перекладачі. «Лор» (`lore`) — що це в світі Eora, довідка для людей і QA, не правило. «Джерело» (`source`) — де це перевірено.", ""]
     for k in sorted(kinds):
         lines += [f"## {k}", "", "| EN | UK | жін. | нейтр. | правило | лор | джерело |", "|---|---|---|---|---|---|---|"]
