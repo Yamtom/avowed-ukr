@@ -52,13 +52,12 @@ MASC_PAST = re.compile(r"(?<![\w'])[Тт]и\s+(?:не\s+|вже\s+|ще\s+|ли�
 ENVOY_MASC = re.compile(r"Посланц|Посланець|Посланец")
 ENVOY_FEM = re.compile(r"Посланниц|Посланнице")
 PLAIN_WS2 = re.compile(r"(?<=\S)  +(?=\S)")
-SPACE_PUNCT = re.compile(r"[ \t][,.;:!?](?!\.)")
+SPACE_PUNCT = re.compile(r"\s[,.;:!?](?!\.)")
 DOUBLE_PUNCT = re.compile(r"(?<![.…])\.\.(?!\.)|,,|;;|!{3,}|\?{3,}")
-IMG_VAR = re.compile(r"<img[^<>]*?/?>|<imginputbind[^<>]*?/?>|\{[^{}]*\}(?:\|(?:plural|ordinal|gender|select)\([^()]*\))?")
 KNOWN_LATIN_OK = {"Avowed", "Obsidian", "Xbox", "Steam", "NVIDIA", "DLSS", "DLAA", "XeSS", "AMD", "FSR", "HDR", "Intel", "Windows",
                   "PlayStation", "Epic", "Unreal", "Engine", "OEI", "Alt", "Cmd", "Ctrl", "Shift", "Tab", "Esc", "Enter", "LORE",
                   "Lorem", "ipsum", "FPS", "GPU", "CPU", "VSync", "TAA", "TSR", "SSAO", "HUD", "DLC", "NPC", "DevOps"}
-PARGRUN = ("bleste", "viate", "dukte dragu", "corba", "nimdut", "saka", "fuitu", "usundit", "nekai", "camaii", "amacul",
+PARGRUN = ("bleste", "viate", "dukte dragu", "corba", "nimdut", "saca", "saka", "fuitu", "usundit", "nekai", "camaii", "amacul",
            "obsomolu vointu", "dragu", "meu")
 PARGRUN_SPELL = re.compile(r"(?<![\w'])фуіту(?![\w'])", re.I)      # canonical spelling is «фуїту» (majority of the DB, style §9)
 
@@ -97,11 +96,6 @@ KNOWN = [
 
 def plain(s):
     return "".join(PROT.split(s)[0::2])
-
-
-def plain_sp(s):
-    """Text view for spacing/punctuation checks: self-closing icons and {vars} stay as an 'X' word token."""
-    return TAG_RE.sub("", IMG_VAR.sub("X", s))
 
 
 def depth_ok(tags):
@@ -308,12 +302,13 @@ def lint(con, groups=None):
             # typography: only when the source text (tags stripped the same way) does not already have the pattern;
             # stripping inline tags/icons leaves "word  ." gaps that exist in the original too (tutorial rows)
             # (tags/variables are replaced by a placeholder, so "{0} ," / "word  {1}" gaps are not flagged: word order differs from the source)
-            ps = plain_sp(uk)
-            if PLAIN_WS2.search(ps) and not re.search(r"[  ]{2,}", plain_sp(ref)):
+            pu_ph = "\x01".join(PROT.split(uk)[0::2])
+            pref_ph = "\x01".join(PROT.split(ref)[0::2])
+            if PLAIN_WS2.search(pu_ph) and not re.search(r"[  ]{2,}", pref_ph):
                 add("DOUBLE_SPACE", field, "double space")
-            if SPACE_PUNCT.search(ps) and not SPACE_PUNCT.search(plain_sp(ref)):
+            if SPACE_PUNCT.search(pu_ph) and not SPACE_PUNCT.search(pref_ph):
                 add("SPACE_PUNCT", field, "space before punctuation")
-            if DOUBLE_PUNCT.search(ps):
+            if DOUBLE_PUNCT.search(pu):
                 add("DOUBLE_PUNCT", field, "doubled punctuation")
             if "№" in uk:
                 add("NUMERO_SIGN", field, "№ is missing in EspinosaNova (font fallback)")
@@ -331,7 +326,7 @@ def lint(con, groups=None):
         # ---- glossary (proper names only; stems tolerate case endings)
         en_pl = plain(en_d)
         low_en, low_uk = en_pl.lower(), plain(uk_d).lower()
-        for rx, en, en_low, uk_term, stems in proper_r:
+        for rx, en, en_low, uk_term, stems in proper_re:
             if en_low in low_en and rx.search(en_pl) and not all(s in low_uk for s in stems):
                 add("GLOSSARY_NAMED" if en_low in NAMED_TERMS else "GLOSSARY_MISS", "uk_default", f"{en} -> {uk_term}")
                 break
@@ -403,7 +398,6 @@ def cmd_mark(a):
         f = ln.split("\t")
         if len(f) >= 8 and f[1] in codes:
             todo.setdefault(int(f[2]), []).append(f"{f[1]}({f[6]}): {f[7]}")
-            
     import batch_io as B
     con = B.connect()
     con.execute("BEGIN IMMEDIATE")
@@ -411,7 +405,7 @@ def cmd_mark(a):
     for rid, msgs in todo.items():
         n += con.execute("UPDATE strings SET status='needs_fix', qa_note=? WHERE id=? AND status IN ('draft','reviewed')",
                          ("lint:" + "; ".join(msgs)[:380] + (" | " + a.note if a.note else ""), rid)).rowcount
-    con.execute("COMPLETE" if 'COMPLETE' in dir(con) else "COMMIT") # handle safe commit
+    con.execute("COMMIT")
     print(f"mark: {n} rows -> needs_fix for codes {sorted(codes)}")
 
 
@@ -436,3 +430,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+

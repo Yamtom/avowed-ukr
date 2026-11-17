@@ -5,7 +5,7 @@ the corrected rows are exported as JSONL and imported through `tools/batch_io.py
   python tools/qa_fixes.py [--codes NEWLINE,PARGRUN_LATIN] [--dry]      (reads logs/qa/lint_latest.tsv)
 
 Fixers
-  NEWLINE        line breaks of the translation take the break types of the source in order (the source may mix \r\n and \n)
+  NEWLINE        line breaks of the translation take the break types of the source in order (the source may mix \\r\\n and \\n)
   PARGRUN_LATIN  invented Pargrun words stay Cyrillic (docs/style_uk.md §9): viate -> віате, bleste -> блесте, ...
 """
 import argparse
