@@ -36,6 +36,7 @@ MISS = LOGS / "nodelinks_miss.tsv"
 NODES_TSV = LOGS / "nodelinks_nodes.tsv"
 OVERRIDES = REPO / "tools" / "data" / "nodelinks_nodes_uk.json"
 TRAIL = ".,;:!?\u2026"
+PROT_RE = re.compile(r"</?[A-Za-z][^<>]*?/?>|</>|(?:\{[^{}]*\}(?:\|(?:plural|ordinal|gender|select)\([^()]*\))?)")
 
 
 def text_hash(s):
@@ -61,8 +62,9 @@ def stem_uk(w):
 
 
 def tok_pattern(t):
+    """stem + at most (letters cut from the base form) + 3 more letters: a word form may be at most 3 letters longer than the term."""
     st = stem_uk(t)
-    bound = 5 if len(t) >= 9 else 4 if len(st) >= 4 else 3
+    bound = (len(t) - len(st)) + 3
     return re.escape(st) + r"\w{0," + str(bound) + r"}"
 
 
@@ -144,8 +146,10 @@ def build_nodes(con, tabs, uk_rows):
             n["source"] = "override"
         n["skip"] = bool(o and o.get("skip"))
         pats = [phrase_pattern(t) for t in n["terms"]]
-        n["patterns"] = [p for p in pats if p]
-        if not o or o.get("terms") is None:
+        n["patterns"] = [p for p in pats if p] + list((o or {}).get("patterns", []))     # reviewed raw regexes (alternations like вог-)
+        if o and (o.get("terms") is not None or o.get("patterns")):
+            n["source"] = "override"
+        if not o or (o.get("terms") is None and not o.get("patterns")):
             have = " ".join(n["patterns"])
             extra = [r"(?<![\w'])" + re.escape(st) + r"\w{0,4}(?![\w'])" for st, cv in n["aligned"] if cv >= 0.85 and len(st) >= 4 and re.escape(st) not in have]
             if not n["patterns"] and n["aligned"]:
@@ -161,8 +165,11 @@ def build_nodes(con, tabs, uk_rows):
 
 
 def find_spans(text, rx):
+    prot = [(m.start(), m.end()) for m in PROT_RE.finditer(text)]
     out = []
     for m in rx.finditer(text):
+        if any(m.start() < pe and m.end() > ps for ps, pe in prot):
+            continue
         e = m.end()
         while e < len(text) and text[e] in TRAIL:
             e += 1

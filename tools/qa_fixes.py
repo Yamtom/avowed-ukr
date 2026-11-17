@@ -22,7 +22,7 @@ REPO = Path(__file__).resolve().parent.parent
 PARGRUN = {  # Latin Pargrun word -> Cyrillic (user-approved list + the forms found in the DB)
     "dukte dragu": "дукте драґу", "obsomolu vointu": "обсомолу воінту", "nimduten": "німдутен", "nimdut": "німдут",
     "viate": "віате", "bleste": "блесте", "nekai": "некай", "camaii": "камаї", "amacul": "амакуль", "corba": "корба",
-    "saka": "сака", "fuitu": "фуїту", "usundit": "усундіт",
+    "saka": "сака", "saca": "сака", "fuitu": "фуїту", "usundit": "усундіт",
 }
 PARGRUN_RE = re.compile(r"(?<![\w'])(" + "|".join(sorted((re.escape(k) for k in PARGRUN), key=len, reverse=True)) + r")(?![\w'])", re.I)
 

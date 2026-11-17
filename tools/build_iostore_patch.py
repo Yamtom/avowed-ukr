@@ -489,7 +489,8 @@ def cmd_build(args):
         assert cid[11] == CHUNK_TYPE_EXPORT_BUNDLE and orig.location(idx)[1] == size, "chunk table out of date"
         tmpl_live = orig.meta(idx)[0] == blake3(rp.template_path(args.raw_dir, src, args.lang).read_bytes())[:20]
         assert tmpl_live, f"raw_assets/{src}_Text_{args.lang} no longer matches the game's chunk {idx} (game updated?)"
-        data, tmpl, stats = rp.build_asset(args.raw_dir, args.db, src, args.lang, args.text, args.fallback)
+        data, tmpl, stats = rp.build_asset(args.raw_dir, args.db, src, args.lang, args.text, args.fallback,
+                                           nodelinks=None if args.no_nodelinks else args.nodelinks, strict_links=args.strict_links)
         chunks.append((cid, data))
         pkg_ids.append(struct.unpack_from("<Q", cid, 0)[0])
         print(f"[asset] {src}: chunk {idx} id={cid.hex()} {len(tmpl):,} -> {len(data):,} B, verified: {stats}")
@@ -532,6 +533,10 @@ def main():
     b.add_argument("--text", choices=rp.TEXT_LANGS, default="uk")
     b.add_argument("--fallback", choices=("en", "pl", "ru", "template"), default="en",
                    help="text for rows without uk_default (default: English)")
+    b.add_argument("--nodelinks", default=str(REPO / "logs" / "nodelinks_uk.json"),
+                   help="Ukrainian NodeLinks cache from tools/build_nodelinks_uk.py (used when it exists)")
+    b.add_argument("--no-nodelinks", action="store_true", help="do not emit Ukrainian NodeLinks (rows keep no highlight spans)")
+    b.add_argument("--strict-links", action="store_true", help="fail when the NodeLinks cache is stale (text changed after it was built)")
     b.add_argument("--install", action="store_true", help="copy .pak/.utoc/.ucas into --install-dir")
     b.add_argument("--install-dir", default=GAME_PAKS)
     args = ap.parse_args()

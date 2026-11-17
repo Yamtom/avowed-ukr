@@ -39,14 +39,23 @@ def prompt(q):
 6. Finish with JSON: batch, reviewed, ok, fixed, unfixed, issues (<=3 most frequent recurring problems, one line - they become new style rules)."""
 
 
-async def run(q):
-    try:
-        return await agent(prompt(q), schema=SCHEMA, role=f"QA {D}/{q}", model=A.get("model", "pro"))
-    except Exception as e:  # noqa: BLE001
-        return {"batch": q, "reviewed": 0, "ok": 0, "error": str(e)[:200]}
+async def run(q, sem):
+    import asyncio
+    async with sem:
+        for attempt in range(A.get("retries", 3)):
+            try:
+                return await agent(prompt(q), schema=SCHEMA, role=f"QA {D}/{q}", model=A.get("model", "pro"))
+            except Exception as e:  # noqa: BLE001
+                msg = str(e)[:200]
+                if ("429" in msg or "RESOURCE_EXHAUSTED" in msg or "UNAVAILABLE" in msg) and attempt + 1 < A.get("retries", 3):
+                    await asyncio.sleep(45 * (attempt + 1))
+                    continue
+                return {"batch": q, "reviewed": 0, "ok": 0, "error": msg}
 
 phase("QA")
-res = await parallel(names, run) if names else []
+import asyncio
+sem = asyncio.Semaphore(A.get("concurrency", 4))
+res = await parallel(names, lambda q: run(q, sem)) if names else []
 tot = {k: sum(int(r.get(k) or 0) for r in res) for k in ("reviewed", "ok", "fixed", "unfixed")}
 print(json.dumps({"dir": D, "files": len(names), **tot,
                   "issues": [f"{r['batch']}: {r.get('error') or r.get('issues', '')}"[:220] for r in res

@@ -50,12 +50,13 @@ MASC_PAST = re.compile(r"(?<![\w'])[Тт]и\s+(?:не\s+|вже\s+|ще\s+|ли�
 ENVOY_MASC = re.compile(r"Посланц|Посланець|Посланец")
 ENVOY_FEM = re.compile(r"Посланниц|Посланнице")
 PLAIN_WS2 = re.compile(r"(?<=\S)  +(?=\S)")
-SPACE_PUNCT = re.compile(r"\s[,.;:!?](?!\.)")
+SPACE_PUNCT = re.compile(r"[ \t][,.;:!?](?!\.)")
 DOUBLE_PUNCT = re.compile(r"(?<![.…])\.\.(?!\.)|,,|;;|!{3,}|\?{3,}")
+IMG_VAR = re.compile(r"<img[^<>]*?/?>|<imginputbind[^<>]*?/?>|\{[^{}]*\}(?:\|(?:plural|ordinal|gender|select)\([^()]*\))?")
 KNOWN_LATIN_OK = {"Avowed", "Obsidian", "Xbox", "Steam", "NVIDIA", "DLSS", "DLAA", "XeSS", "AMD", "FSR", "HDR", "Intel", "Windows",
                   "PlayStation", "Epic", "Unreal", "Engine", "OEI", "Alt", "Cmd", "Ctrl", "Shift", "Tab", "Esc", "Enter", "LORE",
                   "Lorem", "ipsum", "FPS", "GPU", "CPU", "VSync", "TAA", "TSR", "SSAO", "HUD", "DLC", "NPC", "DevOps"}
-PARGRUN = ("bleste", "viate", "dukte dragu", "corba", "nimdut", "saka", "fuitu", "usundit", "nekai", "camaii", "amacul",
+PARGRUN = ("bleste", "viate", "dukte dragu", "corba", "nimdut", "saca", "saka", "fuitu", "usundit", "nekai", "camaii", "amacul",
            "obsomolu vointu", "dragu")
 
 GROUP_UI_LEN = ("game/gui", "game/inputbindings")
@@ -74,6 +75,7 @@ SEV = {
     "UI_LENGTH": "P3", "DOUBLE_SPACE": "P3", "SPACE_PUNCT": "P3", "DOUBLE_PUNCT": "P3", "NUMERO_SIGN": "P3", "LATIN_UNCHANGED": "P3",
     "ICU_NOFEW": "P3", "FEMALE_HAS_ENVOY_MASC": "P3", "DEFAULT_ENVOY_FEM": "P3", "ELLIPSIS_STYLE": "P3",
     "ARQUEBUS_GENDER": "P2", "GIATTO_FORM": "P2", "KOSMIN_FORM": "P2", "GLOSSARY_NAMED": "P2",
+    "DREAMTHRALL_CALQUE": "P2", "RDC_CALQUE": "P2", "STELGAER_SPELLING": "P2", "TIRA_NUI_SPELLING": "P2",
 }
 # terms the project owner named as violated: a glossary miss on them is a confirmed P2, not a warning
 NAMED_TERMS = {"dreamthrall", "deadfire", "strangleroot", "fiorian", "swordfish", "lödwyn", "lodwyn", "ukaizo"}
@@ -83,11 +85,20 @@ KNOWN = [
     ("ARQUEBUS_GENDER", re.compile(r"(?:ий|ій|ого|ому|им|цей|мій|твій|наш|ваш|один)\s+[Аа]ркебуз(?![\w'])"), None, "аркебуза — жіночого роду (аркебуза, аркебузу), не «аркебуз»"),
     ("GIATTO_FORM", re.compile(r"Джіат|Джат"), None, "Ґіатта: кличний «Ґіатто», не «Джіатто»"),
     ("KOSMIN_FORM", re.compile(r"Космина"), re.compile(r"Kosmin|Cosmin(?!a)"), "Космін — чоловік (Косміна), не «Космина»"),
+    ("DREAMTHRALL_CALQUE", re.compile(r"бич\w*\s+сн", re.I), re.compile(r"Dreamscourge", re.I), "Dreamscourge = Сновидна Моровиця (не «Бич Снів»)"),
+    ("RDC_CALQUE", re.compile(r"(?<![\w'])ККА(?![\w'])"), re.compile(r"\bRDC\b"), "RDC = ККМВ (Королівська Компанія Мертвого Вогню, не рос. ККА)"),
+    ("STELGAER_SPELLING", re.compile(r"(?<![\w'])[Сс]тел[ґг]ер\w*", re.I), None, "уніфікація: «стелґаер» (не «стелґер»/«стелгер»)"),
+    ("TIRA_NUI_SPELLING", re.compile(r"тір\w*\s+нуі(?![а-яіїєґ])", re.I), None, "правопис: «тіра нуї» (ї після голосної)"),
 ]
 
 
 def plain(s):
     return "".join(PROT.split(s)[0::2])
+
+
+def plain_sp(s):
+    """Text view for spacing/punctuation checks: self-closing icons and {vars} stay as an 'X' word token."""
+    return TAG_RE.sub("", IMG_VAR.sub("X", s))
 
 
 def depth_ok(tags):
@@ -275,11 +286,12 @@ def lint(con, groups=None):
                 add("PARTICIPLE", field, "active participle: " + PARTICIPLE.search(pu).group(0))
             if cat == "quests" and not hasg and MASC_PAST.search(pu):
                 add("MASC_PAST_PLAYER", field, "gendered past tense about the player in a row without female variant")
-            if PLAIN_WS2.search(pu):
+            ps = plain_sp(uk)
+            if PLAIN_WS2.search(ps):
                 add("DOUBLE_SPACE", field, "double space")
-            if SPACE_PUNCT.search(pu):
+            if SPACE_PUNCT.search(ps):
                 add("SPACE_PUNCT", field, "space before punctuation")
-            if DOUBLE_PUNCT.search(pu):
+            if DOUBLE_PUNCT.search(ps):
                 add("DOUBLE_PUNCT", field, "doubled punctuation")
             if "№" in uk:
                 add("NUMERO_SIGN", field, "№ is missing in EspinosaNova (font fallback)")
