@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Avowed l10n: restore NodeLinks (lore/glossary highlight spans) for the Ukrainian text.
 
 Every FOEIStringTable has three maps key -> [(key, node_id, start, length, 0)] (Default / Female / Extra text of that string):
@@ -60,8 +60,8 @@ def norm_form(s):
 
 
 def stem_uk(w):
-    """Stem for the case endings. Words of up to 5 letters lose only a final vowel (\u0415\u043e\u0440\u0430 -> \u0435\u043e\u0440, \u0411\u0435\u0440\u0430\u0442 stays whole): a short
-    stem like \u00ab\u0431\u0435\u0440\u00bb of \u0411\u0435\u0440\u0430\u0442 would also match \u0431\u0435\u0440\u0435\u0448/\u0431\u0435\u0440\u0435\u0433."""
+    """Stem for the case endings. Words of up to 5 letters lose only a final vowel (Еора -> еор, Берат stays whole): a short
+    stem like «бер» of Берат would also match береш/берег."""
     w = w.lower().replace("\u2019", "'")
     n = len(w)
     if n >= 9:

@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Avowed l10n: full QA linter over db/avowed_l10n.db (stdlib only, read-only diagnostics).
 
 Checks every translated row and every filled Ukrainian form (uk_default / uk_female / uk_extra) against its English /
@@ -321,7 +321,7 @@ def lint(con, groups=None):
         # ---- glossary (proper names only; stems tolerate case endings)
         en_pl = plain(en_d)
         low_en, low_uk = en_pl.lower(), plain(uk_d).lower()
-        for rx, en, en_low, uk_term, stems in proper_re:
+        for rx, en, en_low, uk_term, stems in proper_r:
             if en_low in low_en and rx.search(en_pl) and not all(s in low_uk for s in stems):
                 add("GLOSSARY_NAMED" if en_low in NAMED_TERMS else "GLOSSARY_MISS", "uk_default", f"{en} -> {uk_term}")
                 break
@@ -393,6 +393,7 @@ def cmd_mark(a):
         f = ln.split("\t")
         if len(f) >= 8 and f[1] in codes:
             todo.setdefault(int(f[2]), []).append(f"{f[1]}({f[6]}): {f[7]}")
+            
     import batch_io as B
     con = B.connect()
     con.execute("BEGIN IMMEDIATE")
@@ -400,7 +401,7 @@ def cmd_mark(a):
     for rid, msgs in todo.items():
         n += con.execute("UPDATE strings SET status='needs_fix', qa_note=? WHERE id=? AND status IN ('draft','reviewed')",
                          ("lint:" + "; ".join(msgs)[:380] + (" | " + a.note if a.note else ""), rid)).rowcount
-    con.execute("COMMIT")
+    con.execute("COMPLETE" if 'COMPLETE' in dir(con) else "COMMIT") # handle safe commit
     print(f"mark: {n} rows -> needs_fix for codes {sorted(codes)}")
 
 
@@ -425,4 +426,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-
