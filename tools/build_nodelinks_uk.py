@@ -36,6 +36,7 @@ MISS = LOGS / "nodelinks_miss.tsv"
 NODES_TSV = LOGS / "nodelinks_nodes.tsv"
 OVERRIDES = REPO / "tools" / "data" / "nodelinks_nodes_uk.json"
 TRAIL = ".,;:!?\u2026"
+PROT_RE = re.compile(r"</?[A-Za-z][^<>]*?/?>|</>|(?:\{[^{}]*\}(?:\|(?:plural|ordinal|gender|select)\([^()]*\))?)")
 
 
 def open_db(a):
@@ -72,7 +73,7 @@ def stem_uk(w):
 
 
 def tok_pattern(t):
-    """stem + at most (letters cut from the base form) + 3 more letters (2 for terms of up to 4 letters)."""
+    """stem + at most (letters cut from the base form) + 3 more letters: a word form may be at most 3 letters longer than the term."""
     st = stem_uk(t)
     bound = (len(t) - len(st)) + (2 if len(t) <= 4 else 3)
     return re.escape(st) + r"\w{0," + str(bound) + r"}"
@@ -163,6 +164,16 @@ def build_nodes(con, tabs, uk_rows):
             # statistical co-occurring stems (n["aligned"]) prove co-occurrence, not identity of the term: they never become a
             # pattern (a lone stem highlights "Високій" instead of "Високій Траві"); they are only exported for the reviewers
             n["source"] = "glossary" if n["patterns"] else "none"
+            have = " ".join(n["patterns"])
+            extra = [r"(?<![\w'])" + re.escape(st) + r"\w{0,4}(?![\w'])" for st, cv in n["aligned"] if cv >= 0.85 and len(st) >= 4 and re.escape(st) not in have]
+            if not n["patterns"] and n["aligned"]:
+                extra = [r"(?<![\w'])" + re.escape(st) + r"\w{0,4}(?![\w'])" for st, cv in n["aligned"][:2]]
+                n["source"] = "aligned"
+            elif n["patterns"]:
+                n["source"] = "glossary"
+            n["patterns"] += extra
+            if not n["patterns"]:
+                n["source"] = "none"
         n["rx"] = re.compile("|".join(sorted(n["patterns"], key=len, reverse=True)), re.I) if n["patterns"] and not n["skip"] else None
     return nodes
 
@@ -171,8 +182,11 @@ SLASH_JOIN = re.compile(r"/|\s/\s")
 
 
 def find_spans(text, rx):
+    prot = [(m.start(), m.end()) for m in PROT_RE.finditer(text)]
     out = []
     for m in rx.finditer(text):
+        if any(m.start() < pe and m.end() > ps for ps, pe in prot):
+            continue
         e = m.end()
         while e < len(text) and text[e] in TRAIL:
             e += 1
