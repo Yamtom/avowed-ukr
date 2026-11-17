@@ -11,3 +11,9 @@ logs/
 db/*.db-wal
 db/*.db-shm
 scratch/
+db/backups/
+release/*.pak
+release/*.utoc
+release/*.ucas
+release/fonts/
+release/ru-slot/

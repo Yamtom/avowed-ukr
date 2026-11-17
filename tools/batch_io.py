@@ -209,7 +209,12 @@ def normalize(uk, ref):
     trail = ref[len(ref.rstrip()):]
     s = lead.replace("\r\n", "\n") + s.strip() + trail.replace("\r\n", "\n")
     if "\r\n" in ref:
-        s = s.replace("\n", "\r\n")
+        toks = re.findall(r"\r\n|\n", ref)             # a source may MIX \r\n and \n: take the break types in order
+        pieces = s.split("\n")
+        if len(pieces) - 1 == len(toks):
+            s = pieces[0] + "".join(t + p for t, p in zip(toks, pieces[1:]))
+        else:
+            s = s.replace("\n", "\r\n")
     return s
 
 
@@ -525,7 +530,11 @@ def cmd_sample(a):
         if r["id"] not in excl and (want is None or group_of(r) in want):
             by[group_of(r)].append(r)
     pick = []
-    if a.tables_file:                                    # 100% review of the listed (problem) tables
+    if getattr(a, "ids_file", None):                     # explicit worklist (e.g. lint findings): TSV/ids, first column = row id
+        wl = {int(x.split("\t")[0]) for x in Path(a.ids_file).read_text(encoding="utf-8").splitlines() if x.split("\t")[0].strip().isdigit()}
+        pick = [r for rs in by.values() for r in rs if r["id"] in wl]
+        by = {}
+    elif a.tables_file:                                  # 100% review of the listed (problem) tables
         tabs = {x.strip() for x in Path(a.tables_file).read_text(encoding="utf-8").splitlines() if x.strip()}
         by = {g: [r for r in rs if r["table_name"] in tabs] for g, rs in by.items()}
         pick = [r for rs in by.values() for r in rs]
@@ -902,6 +911,7 @@ def main():
     s.add_argument("--groups", help="comma separated groups (D11, game/gui, quests, chatter, codex, conv:companions ...)")
     s.add_argument("--flagged", action="store_true", help="soft-flagged rows take up to half of the quota")
     s.add_argument("--tables-file", help="review ALL draft rows of the tables listed in this file (problem tables)")
+    s.add_argument("--ids-file", help="review exactly the draft rows whose ids are in the first column of this file")
     rf = sub.add_parser("reflag")
     rf.add_argument("--scope", choices=("ui", "story", "all"), default="all")
     ff = sub.add_parser("flag-to-fix")
