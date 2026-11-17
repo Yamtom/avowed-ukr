@@ -51,6 +51,8 @@ PARTICIPLE_OK = re.compile(r"^(?:гаряч|горюч|тріскуч|колюч
 MASC_PAST = re.compile(r"(?<![\w'])[Тт]и\s+(?:не\s+|вже\s+|ще\s+|лише\s+|одразу\s+)?\w*(?:[аеиіоуяє]в|шов|ів)(?![\w'])")
 ENVOY_MASC = re.compile(r"Посланц|Посланець|Посланец")
 ENVOY_FEM = re.compile(r"Посланниц|Посланнице")
+# the neutral form «Посланець/посланниця» may write the second form in lower case after the slash
+ENVOY_FEM_ANYCASE = re.compile(r"[Пп]осланниц")
 PLAIN_WS2 = re.compile(r"(?<=\S)  +(?=\S)")
 SPACE_PUNCT = re.compile(r"\s[,.;:!?](?!\.)")
 DOUBLE_PUNCT = re.compile(r"(?<![.…])\.\.(?!\.)|,,|;;|!{3,}|\?{3,}")
@@ -287,7 +289,7 @@ def lint(con, groups=None):
                 add("FORMAL_CAPITAL", field, "capitalised formal «Ви» in a system text")
             elif cat in SYSTEM_CATS and FORMAL.search(pu):
                 add("FORMAL_YOU", field, "formal address in a system category (check context)")
-            if field == "uk_extra" and need_x and ENVOY_MASC.search(uk) and not ENVOY_FEM.search(uk):
+            if field == "uk_extra" and need_x and ENVOY_MASC.search(uk) and not ENVOY_FEM_ANYCASE.search(uk):
                 add("EXTRA_ENVOY_SINGLE", field, "uk_extra names the Envoy only in the masculine form")
             if field == "uk_default" and re.search(r"Посланниц", uk) and not ENVOY_MASC.search(uk):
                 add("DEFAULT_ENVOY_FEM", field, "uk_default uses the feminine Envoy form")
