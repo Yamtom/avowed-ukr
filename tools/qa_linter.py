@@ -45,7 +45,9 @@ FORMAL_CAP_MID = re.compile(r"(?<=[а-яіїєґ,;:] )(?:Ви|Вас|Вам|Ва
 INFORMAL = re.compile(r"(?<![\w'])(?:[Тт]и|[Тт]обі|[Тт]ебе|[Тт]обою|[Тт]вій|[Тт]воя|[Тт]воє|[Тт]вої|[Тт]воїх|[Тт]вого|[Тт]вому)(?![\w'])")
 RUSISM_STRICT = re.compile(r"(?<![\w'])(?:призива\w*|являєтьс\w*|слідуюч\w*|прийма\w* участь|на протязі|в залежності від|відноситьс\w*|"
                            r"стараюс\w*|стараєш\w*|скоріше|прямо як|берегись|проявляєтьс\w*)", re.I)
-PARTICIPLE = re.compile(r"(?<![\w'])[а-яіїєґ']{3,}(?:учий|ючий|ачий|ячий|учого|ючого|ачого|ячого|учі|ючі|ачі|ячі)(?![\w'])", re.I)
+PARTICIPLE = re.compile(r"(?<![\w'])[а-яіїєґ']{3,}(?:учий|ючий|ачий|ячий|учого|ючого|ачого|ячого|учому|ючому|ачому|ячому|учим|ючим|ачим|ячим)(?![\w'])", re.I)
+# lexicalised adjectives / nouns that look like active participles but are ordinary Ukrainian words
+PARTICIPLE_OK = re.compile(r"^(?:гаряч|горюч|тріскуч|колюч|пекуч|ледач|плаксив|співуч|гнучк|летюч|пахуч|могуч|живуч|їдуч|стоячи|лежач|сидяч|кусуч|мінлив|плавуч|потужн|звучн|рвуч|дзвінк|скрипуч|шипуч|кипуч|палюч|смердюч|квітуч|мовчаз|невмируч|нестерпн|всемогуч)", re.I)
 MASC_PAST = re.compile(r"(?<![\w'])[Тт]и\s+(?:не\s+|вже\s+|ще\s+|лише\s+|одразу\s+)?\w*(?:[аеиіоуяє]в|шов|ів)(?![\w'])")
 ENVOY_MASC = re.compile(r"Посланц|Посланець|Посланец")
 ENVOY_FEM = re.compile(r"Посланниц|Посланнице")
@@ -56,7 +58,8 @@ KNOWN_LATIN_OK = {"Avowed", "Obsidian", "Xbox", "Steam", "NVIDIA", "DLSS", "DLAA
                   "PlayStation", "Epic", "Unreal", "Engine", "OEI", "Alt", "Cmd", "Ctrl", "Shift", "Tab", "Esc", "Enter", "LORE",
                   "Lorem", "ipsum", "FPS", "GPU", "CPU", "VSync", "TAA", "TSR", "SSAO", "HUD", "DLC", "NPC", "DevOps"}
 PARGRUN = ("bleste", "viate", "dukte dragu", "corba", "nimdut", "saka", "fuitu", "usundit", "nekai", "camaii", "amacul",
-           "obsomolu vointu", "dragu")
+           "obsomolu vointu", "dragu", "meu")
+PARGRUN_SPELL = re.compile(r"(?<![\w'])фуіту(?![\w'])", re.I)      # canonical spelling is «фуїту» (majority of the DB, style §9)
 
 GROUP_UI_LEN = ("game/gui", "game/inputbindings")
 SYSTEM_CATS = {"quests", "game/gui", "game/tooltips", "game/tutorial", "game/inputbindings", "game/characterstats",
@@ -68,7 +71,7 @@ SEV = {
     "CTRL_CHAR": "P0", "EMPTY_UK": "P0", "BAD_ENCODING": "P0",
     "MISSING_FEMALE": "P1", "MISSING_EXTRA": "P1",
     "RU_LETTER": "P2", "PL_LETTER": "P2", "BAD_APOSTROPHE": "P2", "STRAIGHT_QUOTES": "P2", "HYPHEN_DASH": "P2",
-    "OLD_GLOSSARY": "P2", "LATIN_LEFTOVER": "P2", "PARGRUN_LATIN": "P2", "EXTRA_ENVOY_SINGLE": "P2",
+    "OLD_GLOSSARY": "P2", "LATIN_LEFTOVER": "P2", "PARGRUN_LATIN": "P2", "PARGRUN_SPELL": "P2", "EXTRA_ENVOY_SINGLE": "P2",
     "FORMAL_CAPITAL": "P2", "RUSISM": "P2", "UNTRANSLATED": "P2",
     "GENDER_SAME": "P3", "EXTRA_SAME": "P3", "FORMAL_YOU": "P3", "PARTICIPLE": "P3", "MASC_PAST_PLAYER": "P3", "GLOSSARY_MISS": "P3",
     "UI_LENGTH": "P3", "DOUBLE_SPACE": "P3", "SPACE_PUNCT": "P3", "DOUBLE_PUNCT": "P3", "NUMERO_SIGN": "P3", "LATIN_UNCHANGED": "P3",
@@ -91,15 +94,22 @@ def plain(s):
 
 
 def depth_ok(tags):
-    d = 0
+    """Tags must be properly NESTED: a stack of tag names (the anonymous closer </> closes the innermost one);
+    self-closing tags (<img .../>) are not pushed. <b><i></b></i> is rejected."""
+    stack = []
     for t in tags:
-        if t.startswith("</"):
-            d -= 1
-            if d < 0:
+        if t == "</>":
+            if not stack:
+                return False
+            stack.pop()
+        elif t.startswith("</"):
+            name = re.match(r"</\s*([A-Za-z][\w.:-]*)", t)
+            if not stack or not name or stack.pop() != name.group(1).lower():
                 return False
         elif not t.endswith("/>"):
-            d += 1
-    return d == 0
+            name = re.match(r"<\s*([A-Za-z][\w.:-]*)", t)
+            stack.append(name.group(1).lower() if name else "?")
+    return not stack
 
 
 def stem(w):
@@ -152,7 +162,8 @@ def lint(con, groups=None):
 
     q = ("SELECT id, source_file, category, table_name, string_id, status, qa_note, has_gender_variant, "
          "en_default, en_female, en_extra, pl_default, pl_female, pl_extra, ru_female, ru_extra, "
-         "uk_default, uk_female, uk_extra FROM strings WHERE status IN ('draft','reviewed')")
+         "uk_default, uk_female, uk_extra FROM strings WHERE status IN ('draft','reviewed') "
+         "OR TRIM(COALESCE(uk_default,'')) <> '' OR TRIM(COALESCE(uk_female,'')) <> '' OR TRIM(COALESCE(uk_extra,'')) <> ''")
     for r in con.execute(q):
         (rid, src, cat, tab, sid, status, note, hasg, en_d, en_f, en_x, pl_d, pl_f, pl_x, ru_f, ru_x, uk_d, uk_f, uk_x) = r
         grp = "D11" if src == "D11" else ("conv:" + tab.split("/")[1] if cat == "conversations" else cat)
@@ -174,12 +185,16 @@ def lint(con, groups=None):
             issues.append((SEV[code], code, rid, grp, short_tab, sid, field, msg[:150].replace("\t", " ").replace("\n", "\\n")))
 
         # ---- P0 / P1: completeness
-        if not uk_d.strip():
+        # every FILLED form is linted whatever the status; completeness is demanded only of translated rows (draft/reviewed)
+        translated = status in ("draft", "reviewed")
+        if not translated:
+            stats["filled_not_translated"] += 1
+        if translated and not uk_d.strip():
             add("EMPTY_UK", "uk_default", "empty translation of a translated row")
             continue
-        if need_f and not uk_f.strip():
+        if translated and need_f and not uk_f.strip():
             add("MISSING_FEMALE", "uk_female", "source has a female variant (en/pl/ru) but uk_female is empty")
-        if need_x and not uk_x.strip():
+        if translated and need_x and not uk_x.strip():
             add("MISSING_EXTRA", "uk_extra", "source has an extra variant (en/pl/ru) but uk_extra is empty")
 
         for field, uk in texts.items():
@@ -239,12 +254,15 @@ def lint(con, groups=None):
                 add("HYPHEN_DASH", field, "hyphen/en dash/-- with spaces, style requires —")
             if re.search(r"[A-Za-z]{2,}", plain(ref)) and not CYR.search(pu):
                 add("UNTRANSLATED", field, "no Cyrillic in a translatable row")
-            lat = [t for t in LATIN.findall(pu) if t not in ok_latin]
+            low = pu.lower()
+            pg_lat = [t for t in LATIN.findall(pu) if any(pg == t.lower() or pg in low.replace(" ", " ") and t.lower() in pg.split() for pg in PARGRUN)]
+            if pg_lat:                                     # style §9: Pargrun words are Cyrillic; NOT covered by the 'kept as source' whitelist
+                add("PARGRUN_LATIN", field, "invented Pargrun word left in Latin: " + ", ".join(pg_lat[:3]))
+            if PARGRUN_SPELL.search(pu):
+                add("PARGRUN_SPELL", field, "non-canonical spelling of a Pargrun word: " + PARGRUN_SPELL.search(pu).group(0))
+            lat = [t for t in LATIN.findall(pu) if t not in ok_latin and t not in pg_lat]
             if lat:
-                low = pu.lower()
-                if any(pg in low for pg in PARGRUN):
-                    add("PARGRUN_LATIN", field, "invented Pargrun word left in Latin: " + ", ".join(lat[:3]))
-                elif any(t.lower() in glossary_en for t in lat):
+                if any(t.lower() in glossary_en for t in lat):
                     add("LATIN_LEFTOVER", field, "glossary term left in Latin: " + ", ".join(t for t in lat if t.lower() in glossary_en)[:60])
                 elif any(t in ref for t in lat):
                     add("LATIN_UNCHANGED", field, "Latin word(s) identical to the source: " + ", ".join(lat[:4]))
@@ -271,13 +289,19 @@ def lint(con, groups=None):
             if field == "uk_female" and ENVOY_MASC.search(uk) and not ENVOY_FEM.search(uk):
                 add("FEMALE_HAS_ENVOY_MASC", field, "uk_female has masculine Envoy form (other person?)")
             # ---- P3
-            if PARTICIPLE.search(pu):
-                add("PARTICIPLE", field, "active participle: " + PARTICIPLE.search(pu).group(0))
+            pm = next((m.group(0) for m in PARTICIPLE.finditer(pu) if not PARTICIPLE_OK.match(m.group(0))), None)
+            if pm:
+                add("PARTICIPLE", field, "active participle: " + pm)
             if cat == "quests" and not hasg and MASC_PAST.search(pu):
                 add("MASC_PAST_PLAYER", field, "gendered past tense about the player in a row without female variant")
-            if PLAIN_WS2.search(pu):
+            # typography: only when the source text (tags stripped the same way) does not already have the pattern;
+            # stripping inline tags/icons leaves "word  ." gaps that exist in the original too (tutorial rows)
+            # (tags/variables are replaced by a placeholder, so "{0} ," / "word  {1}" gaps are not flagged: word order differs from the source)
+            pu_ph = "\x01".join(PROT.split(uk)[0::2])
+            pref_ph = "\x01".join(PROT.split(ref)[0::2])
+            if PLAIN_WS2.search(pu_ph) and not re.search(r"[  ]{2,}", pref_ph):
                 add("DOUBLE_SPACE", field, "double space")
-            if SPACE_PUNCT.search(pu):
+            if SPACE_PUNCT.search(pu_ph) and not SPACE_PUNCT.search(pref_ph):
                 add("SPACE_PUNCT", field, "space before punctuation")
             if DOUBLE_PUNCT.search(pu):
                 add("DOUBLE_PUNCT", field, "doubled punctuation")

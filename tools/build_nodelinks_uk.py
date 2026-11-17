@@ -38,6 +38,11 @@ OVERRIDES = REPO / "tools" / "data" / "nodelinks_nodes_uk.json"
 TRAIL = ".,;:!?\u2026"
 
 
+def open_db(a):
+    """read-only connection to --db (default db/avowed_l10n.db); a release is built from a named snapshot of the DB"""
+    return sqlite3.connect(f"file:{Path(a.db).as_posix()}?mode=ro", uri=True)
+
+
 def text_hash(s):
     return hashlib.sha1(s.encode("utf-8")).hexdigest()[:12]
 
@@ -55,14 +60,21 @@ def norm_form(s):
 
 
 def stem_uk(w):
+    """Stem for the case endings. Words of up to 5 letters lose only a final vowel (\u0415\u043e\u0440\u0430 -> \u0435\u043e\u0440, \u0411\u0435\u0440\u0430\u0442 stays whole): a short
+    stem like \u00ab\u0431\u0435\u0440\u00bb of \u0411\u0435\u0440\u0430\u0442 would also match \u0431\u0435\u0440\u0435\u0448/\u0431\u0435\u0440\u0435\u0433."""
     w = w.lower().replace("\u2019", "'")
     n = len(w)
-    return w[:n - 3] if n >= 9 else w[:n - 2] if n >= 5 else w[:n - 1] if n == 4 else w
+    if n >= 9:
+        return w[:n - 3]
+    if n >= 6:
+        return w[:n - 2]
+    return w[:-1] if n > 3 and w[-1] in "\u0430\u044f\u043e\u0435\u0454\u0438\u0456\u0457\u044e\u0443\u044c" else w
 
 
 def tok_pattern(t):
+    """stem + at most (letters cut from the base form) + 3 more letters (2 for terms of up to 4 letters)."""
     st = stem_uk(t)
-    bound = 5 if len(t) >= 9 else 4 if len(st) >= 4 else 3
+    bound = (len(t) - len(st)) + (2 if len(t) <= 4 else 3)
     return re.escape(st) + r"\w{0," + str(bound) + r"}"
 
 
@@ -144,20 +156,18 @@ def build_nodes(con, tabs, uk_rows):
             n["source"] = "override"
         n["skip"] = bool(o and o.get("skip"))
         pats = [phrase_pattern(t) for t in n["terms"]]
-        n["patterns"] = [p for p in pats if p]
-        if not o or o.get("terms") is None:
-            have = " ".join(n["patterns"])
-            extra = [r"(?<![\w'])" + re.escape(st) + r"\w{0,4}(?![\w'])" for st, cv in n["aligned"] if cv >= 0.85 and len(st) >= 4 and re.escape(st) not in have]
-            if not n["patterns"] and n["aligned"]:
-                extra = [r"(?<![\w'])" + re.escape(st) + r"\w{0,4}(?![\w'])" for st, cv in n["aligned"][:2]]
-                n["source"] = "aligned"
-            elif n["patterns"]:
-                n["source"] = "glossary"
-            n["patterns"] += extra
-            if not n["patterns"]:
-                n["source"] = "none"
+        n["patterns"] = [p for p in pats if p] + list((o or {}).get("patterns", []))     # reviewed raw regexes (alternations like вог-)
+        if o and (o.get("terms") is not None or o.get("patterns")):
+            n["source"] = "override"
+        if not o or (o.get("terms") is None and not o.get("patterns")):
+            # statistical co-occurring stems (n["aligned"]) prove co-occurrence, not identity of the term: they never become a
+            # pattern (a lone stem highlights "Високій" instead of "Високій Траві"); they are only exported for the reviewers
+            n["source"] = "glossary" if n["patterns"] else "none"
         n["rx"] = re.compile("|".join(sorted(n["patterns"], key=len, reverse=True)), re.I) if n["patterns"] and not n["skip"] else None
     return nodes
+
+
+SLASH_JOIN = re.compile(r"/|\s/\s")
 
 
 def find_spans(text, rx):
@@ -166,6 +176,10 @@ def find_spans(text, rx):
         e = m.end()
         while e < len(text) and text[e] in TRAIL:
             e += 1
+        # the gender-neutral variants write both forms of a term with a slash (Посланцю/Посланнице): one highlight over the pair
+        if out and SLASH_JOIN.fullmatch(text[out[-1][1]:m.start()] or "\0"):
+            out[-1] = (out[-1][0], e)
+            continue
         out.append((m.start(), e))
     return out
 
@@ -177,6 +191,9 @@ def references(tabs):
             for p, od in links.items():
                 for k, els in od.items():
                     text = entries.get(k, ("", "", ""))[p - 4]
+                    if len(text.encode("utf-16-le", "surrogatepass")) != 2 * len(text):
+                        # original spans are UTF-16 offsets and are sliced here as Python indexes: only valid inside the BMP
+                        raise SystemExit(f"non-BMP character in a linked source text ({t}, prop {p}, key {k}): extend references() to UTF-16 slicing")
                     cnt = collections.Counter(e[1] for e in els)
                     r = ref.setdefault((t, p, k), {"nodes": collections.Counter(), "pos": collections.defaultdict(list), "en": ""})
                     for nid, c in cnt.items():
@@ -184,22 +201,52 @@ def references(tabs):
                     if lg == "enus" or not r["pos"]:
                         r["en"] = text
                         for e in els:
-                            r["pos"][e[1]].append((e[2] / max(1, len(text)), text[e[2]:e[2] + e[3]]))
+                            r["pos"][e[1]].append((e[2] / max(1, len(text)), text[e[2]:e[2] + e[3]], e[2]))
     for r in ref.values():
         r["n_ref"] = sum(r["nodes"].values())
     return ref
 
 
 def resolve_overlaps(found):
-    found.sort(key=lambda x: (x[1], -(x[2] - x[1])))
-    out = []
+    """Spans of different nodes must not overlap. Rule: the longer span (the more specific term) wins; two different nodes
+    on equally long overlapping spans are a real conflict and BOTH are dropped (no order-dependent guess).
+    Returns (kept, dropped); every dropped span is reported to nodelinks_miss.tsv by the caller."""
+    found = sorted(found, key=lambda x: (x[1], -(x[2] - x[1]), x[0]))
+    kept, dropped = [], []
     for nid, s, e in found:
-        if out and s < out[-1][2]:
-            if e - s > out[-1][2] - out[-1][1]:
-                out[-1] = (nid, s, e)
+        if kept and s < kept[-1][2]:
+            pn, ps, pe = kept[-1]
+            if (pn, ps, pe) == (nid, s, e):
+                continue                                    # the very same span found twice
+            if e - s > pe - ps:
+                dropped.append(kept.pop())
+                kept.append((nid, s, e))
+            elif e - s < pe - ps:
+                dropped.append((nid, s, e))
+            elif pn == nid:
+                continue                                    # same node, same length: one highlight
+            else:
+                dropped.append(kept.pop())
+                dropped.append((nid, s, e))
             continue
-        out.append((nid, s, e))
-    return out
+        kept.append((nid, s, e))
+    return kept, dropped
+
+
+def ordinal_pick(r, nid, spans):
+    """The translation has more matches than the source has linked spans. Not guessed by proximity: only when the source text
+    itself contains the linked surface form exactly len(spans) times (so occurrence i of the source <-> occurrence i of the
+    translation) and every linked source span is one of those occurrences, the linked ordinals are taken. Otherwise None."""
+    pos = r["pos"].get(nid) or []
+    forms = {t.rstrip(TRAIL + " ").lower() for _q, t, _a in pos if t.strip()}
+    if not forms or len(pos) != r["nodes"][nid]:
+        return None
+    low = r["en"].lower()
+    occ = sorted({m.start() for f in forms for m in re.finditer(r"(?<![\w'])" + re.escape(f) + r"(?![\w'])", low)})
+    linked = sorted(a for _q, _t, a in pos)
+    if len(occ) != len(spans) or not all(a in occ for a in linked):
+        return None
+    return [spans[occ.index(a)] for a in linked]
 
 
 def compute(con):
@@ -234,17 +281,22 @@ def compute(con):
                     miss_ex[nid].append((r["pos"][nid][0][1] if r["pos"].get(nid) else "", text[:110]))
                 continue
             if len(spans) > need:
-                pos = sorted(q for q, _s in r["pos"].get(nid, [])) or [i / max(1, need) for i in range(need)]
-                chosen = []
-                for q in pos[:need]:
-                    chosen.append(min((s for s in spans if s not in chosen), key=lambda s: abs(s[0] / max(1, len(text)) - q)))
-                if len(spans) - need >= 2:
-                    miss.append((t, k, p, nid, f"ambiguous: {len(spans)} occurrences for {need} source span(s) (closest taken)"))
-                spans = sorted(chosen)
+                picked = ordinal_pick(r, nid, spans)
+                if picked is None:
+                    tot["ambiguous"] += need
+                    miss.append((t, k, p, nid, f"ambiguous: {len(spans)} occurrences for {need} source span(s), not guessed"))
+                    if len(miss_ex[nid]) < 3:
+                        miss_ex[nid].append((r["pos"][nid][0][1] if r["pos"].get(nid) else "", text[:110]))
+                    continue
+                tot["ordinal"] += need
+                spans = picked
             found += [(nid, s, e) for s, e in spans[:need]]
             if len(spans) < need:
                 miss.append((t, k, p, nid, f"only {len(spans)} of {need} occurrences found"))
-        found = resolve_overlaps(found)
+        found, dropped = resolve_overlaps(found)
+        for nid, s, e in dropped:
+            tot["overlap"] += 1
+            miss.append((t, k, p, nid, f"overlap with another node's span, not guessed: {text[s:e][:30]}"))
         for nid, s, e in found:
             per_node[nid][0] += 1
             if len(examples[nid]) < 3 and (tot["restored"] + len(examples[nid])) % 7 == 0 or len(examples[nid]) < 1:
@@ -257,7 +309,7 @@ def compute(con):
 
 
 def cmd_build(a):
-    con = sqlite3.connect(f"file:{(REPO / 'db' / 'avowed_l10n.db').as_posix()}?mode=ro", uri=True)
+    con = open_db(a)
     tabs, nodes, cache, miss, tot, per_node, _ex, _mx = compute(con)
     LOGS.mkdir(parents=True, exist_ok=True)
     CACHE.write_text(json.dumps({"version": 2, "links": cache}, ensure_ascii=False), encoding="utf-8")
@@ -278,13 +330,14 @@ def cmd_build(a):
     print(f"nodelinks build: reference spans (EN u PL, translated rows) {tot['ref']}, restored {tot['restored']} = {100 * tot['restored'] / max(1, tot['ref']):.1f}% "
           f"| of PL originals {pl_total}: {100 * tot['restored'] / pl_total:.1f}% | EN originals {en_total}")
     print(f"  nodes {len(nodes)}: " + ", ".join(f"{s} {sum(1 for n in nodes.values() if n['source'] == s)}" for s in ("glossary", "aligned", "override", "none"))
-          + f"; misses {len(miss)} {dict(reasons.most_common(4))} -> {MISS.name}")
+          + f"; misses {len(miss)} {dict(reasons.most_common(5))} -> {MISS.name}")
+    print(f"  not guessed: ambiguous {tot['ambiguous']} spans, overlap conflicts {tot['overlap']}; resolved by verified ordinal rule {tot['ordinal']}")
     print("  lowest-recall nodes (>=5 refs): " + ", ".join(f"{nid}:{r:.0f}%/{n}" for r, nid, n in low))
     return 0
 
 
 def cmd_review_export(a):
-    con = sqlite3.connect(f"file:{(REPO / 'db' / 'avowed_l10n.db').as_posix()}?mode=ro", uri=True)
+    con = open_db(a)
     tabs, nodes, cache, miss, tot, per_node, examples, miss_ex = compute(con)
     out = LOGS / "nodelinks_review"
     out.mkdir(parents=True, exist_ok=True)
@@ -305,7 +358,7 @@ def cmd_review_export(a):
 
 
 def cmd_verify(a):
-    con = sqlite3.connect(f"file:{(REPO / 'db' / 'avowed_l10n.db').as_posix()}?mode=ro", uri=True)
+    con = open_db(a)
     cache = json.loads(CACHE.read_text(encoding="utf-8"))["links"]
     uk_rows = load_uk(con)
     bad = collections.Counter()
@@ -325,7 +378,11 @@ def cmd_verify(a):
                 bad["foreign_key"] += 1
             if s < 0 or ln <= 0 or (s + ln) * 2 > len(text16):
                 bad["out_of_range"] += 1
-            span = text16[s * 2:(s + ln) * 2].decode("utf-16-le", "ignore")
+            try:
+                span = text16[s * 2:(s + ln) * 2].decode("utf-16-le")      # strict: a cut surrogate pair is an error, not ignored
+            except UnicodeDecodeError:
+                bad["utf16_split"] += 1
+                continue
             if not span or span[0].isspace() or span[-1].isspace():
                 bad["span_edge_space"] += 1
             if s < prev_end:
@@ -336,7 +393,7 @@ def cmd_verify(a):
 
 
 def cmd_nodes(a):
-    con = sqlite3.connect(f"file:{(REPO / 'db' / 'avowed_l10n.db').as_posix()}?mode=ro", uri=True)
+    con = open_db(a)
     nodes = build_nodes(con, load_tables(), load_uk(con))
     print(f"nodes: {len(nodes)}; pattern source {dict(collections.Counter(n['source'] for n in nodes.values()))}")
     return 0
@@ -345,6 +402,7 @@ def cmd_nodes(a):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("cmd", choices=("nodes", "build", "verify", "review-export"))
+    ap.add_argument("--db", default=str(REPO / "db" / "avowed_l10n.db"))
     a = ap.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")

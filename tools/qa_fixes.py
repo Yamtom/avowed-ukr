@@ -22,8 +22,10 @@ REPO = Path(__file__).resolve().parent.parent
 PARGRUN = {  # Latin Pargrun word -> Cyrillic (user-approved list + the forms found in the DB)
     "dukte dragu": "дукте драґу", "obsomolu vointu": "обсомолу воінту", "nimduten": "німдутен", "nimdut": "німдут",
     "viate": "віате", "bleste": "блесте", "nekai": "некай", "camaii": "камаї", "amacul": "амакуль", "corba": "корба",
-    "saka": "сака", "fuitu": "фуїту", "usundit": "усундіт",
+    "saka": "сака", "fuitu": "фуїту", "usundit": "усундіт", "meu": "меу",
 }
+SPELL = {"фуіту": "фуїту"}   # one canonical Cyrillic spelling per Pargrun word (as in the majority of the DB)
+SPELL_RE = re.compile(r"(?<![\w'])(" + "|".join(SPELL) + r")(?![\w'])", re.I)
 PARGRUN_RE = re.compile(r"(?<![\w'])(" + "|".join(sorted((re.escape(k) for k in PARGRUN), key=len, reverse=True)) + r")(?![\w'])", re.I)
 
 
@@ -44,6 +46,14 @@ def fix_pargrun(uk):
         w = m.group(1)
         return cyr.upper() if w.isupper() and len(w) > 1 else (cyr[0].upper() + cyr[1:] if w[0].isupper() else cyr)
     return PARGRUN_RE.sub(sub, uk)
+
+
+def fix_spell(uk):
+    def sub(m):
+        cyr = SPELL[m.group(1).lower()]
+        w = m.group(1)
+        return cyr.upper() if w.isupper() and len(w) > 1 else (cyr[0].upper() + cyr[1:] if w[0].isupper() else cyr)
+    return SPELL_RE.sub(sub, uk)
 
 
 def main():
@@ -77,6 +87,8 @@ def main():
                     txt = fixed
             if "PARGRUN_LATIN" in cs:
                 txt = fix_pargrun(txt)
+            if "PARGRUN_SPELL" in cs:
+                txt = fix_spell(txt)
             new[i] = txt
         if new == [uk_d, uk_f, uk_x]:
             skipped.append(rid)
