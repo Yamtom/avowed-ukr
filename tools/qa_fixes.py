@@ -22,7 +22,7 @@ REPO = Path(__file__).resolve().parent.parent
 PARGRUN = {  # Latin Pargrun word -> Cyrillic (user-approved list + the forms found in the DB)
     "dukte dragu": "дукте драґу", "obsomolu vointu": "обсомолу воінту", "nimduten": "німдутен", "nimdut": "німдут",
     "viate": "віате", "bleste": "блесте", "nekai": "некай", "camaii": "камаї", "amacul": "амакуль", "corba": "корба",
-    "saka": "сака", "fuitu": "фуїту", "usundit": "усундіт", "meu": "меу",
+    "saka": "сака", "saca": "сака", "fuitu": "фуїту", "usundit": "усундіт", "meu": "меу",
 }
 SPELL = {"фуіту": "фуїту"}   # one canonical Cyrillic spelling per Pargrun word (as in the majority of the DB)
 SPELL_RE = re.compile(r"(?<![\w'])(" + "|".join(SPELL) + r")(?![\w'])", re.I)

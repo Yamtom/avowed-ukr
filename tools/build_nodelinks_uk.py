@@ -36,6 +36,8 @@ MISS = LOGS / "nodelinks_miss.tsv"
 NODES_TSV = LOGS / "nodelinks_nodes.tsv"
 OVERRIDES = REPO / "tools" / "data" / "nodelinks_nodes_uk.json"
 TRAIL = ".,;:!?\u2026"
+# tags / {variables} / ICU calls are not text: a span must never overlap them (a stem like \u00ab\u0433\u0430\u0440\u00bb must not match inside <img id="\u2026"/>)
+PROT_RE = re.compile(r"</?[A-Za-z][^<>]*?/?>|</>|(?:\{[^{}]*\}(?:\|(?:plural|ordinal|gender|select)\([^()]*\))?)")
 
 
 def open_db(a):
@@ -172,7 +174,10 @@ SLASH_JOIN = re.compile(r"/|\s/\s")
 
 def find_spans(text, rx):
     out = []
+    prot = [(m.start(), m.end()) for m in PROT_RE.finditer(text)]
     for m in rx.finditer(text):
+        if any(m.start() < pe and m.end() > ps for ps, pe in prot):
+            continue
         e = m.end()
         while e < len(text) and text[e] in TRAIL:
             e += 1

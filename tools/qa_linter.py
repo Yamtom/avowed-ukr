@@ -57,7 +57,7 @@ DOUBLE_PUNCT = re.compile(r"(?<![.…])\.\.(?!\.)|,,|;;|!{3,}|\?{3,}")
 KNOWN_LATIN_OK = {"Avowed", "Obsidian", "Xbox", "Steam", "NVIDIA", "DLSS", "DLAA", "XeSS", "AMD", "FSR", "HDR", "Intel", "Windows",
                   "PlayStation", "Epic", "Unreal", "Engine", "OEI", "Alt", "Cmd", "Ctrl", "Shift", "Tab", "Esc", "Enter", "LORE",
                   "Lorem", "ipsum", "FPS", "GPU", "CPU", "VSync", "TAA", "TSR", "SSAO", "HUD", "DLC", "NPC", "DevOps"}
-PARGRUN = ("bleste", "viate", "dukte dragu", "corba", "nimdut", "saka", "fuitu", "usundit", "nekai", "camaii", "amacul",
+PARGRUN = ("bleste", "viate", "dukte dragu", "corba", "nimdut", "saca", "saka", "fuitu", "usundit", "nekai", "camaii", "amacul",
            "obsomolu vointu", "dragu", "meu")
 PARGRUN_SPELL = re.compile(r"(?<![\w'])фуіту(?![\w'])", re.I)      # canonical spelling is «фуїту» (majority of the DB, style §9)
 
@@ -77,6 +77,7 @@ SEV = {
     "UI_LENGTH": "P3", "DOUBLE_SPACE": "P3", "SPACE_PUNCT": "P3", "DOUBLE_PUNCT": "P3", "NUMERO_SIGN": "P3", "LATIN_UNCHANGED": "P3",
     "ICU_NOFEW": "P3", "FEMALE_HAS_ENVOY_MASC": "P3", "DEFAULT_ENVOY_FEM": "P3", "ELLIPSIS_STYLE": "P3",
     "ARQUEBUS_GENDER": "P2", "GIATTO_FORM": "P2", "KOSMIN_FORM": "P2", "GLOSSARY_NAMED": "P2",
+    "DREAMTHRALL_CALQUE": "P2", "RDC_CALQUE": "P2", "STELGAER_SPELLING": "P2", "TIRA_NUI_SPELLING": "P2",
 }
 # terms the project owner named as violated: a glossary miss on them is a confirmed P2, not a warning
 NAMED_TERMS = {"dreamthrall", "deadfire", "strangleroot", "fiorian", "swordfish", "lödwyn", "lodwyn", "ukaizo"}
@@ -86,6 +87,10 @@ KNOWN = [
     ("ARQUEBUS_GENDER", re.compile(r"(?:ий|ій|ого|ому|им|цей|мій|твій|наш|ваш|один)\s+[Аа]ркебуз(?![\w'])"), None, "аркебуза — жіночого роду (аркебуза, аркебузу), не «аркебуз»"),
     ("GIATTO_FORM", re.compile(r"Джіат|Джат"), None, "Ґіатта: кличний «Ґіатто», не «Джіатто»"),
     ("KOSMIN_FORM", re.compile(r"Космина"), re.compile(r"Kosmin|Cosmin(?!a)"), "Космін — чоловік (Косміна), не «Космина»"),
+    ("DREAMTHRALL_CALQUE", re.compile(r"бич\w*\s+сн", re.I), re.compile(r"Dreamscourge", re.I), "Dreamscourge = Сновидна Моровиця (не «Бич Снів»)"),
+    ("RDC_CALQUE", re.compile(r"(?<![\w'])ККА(?![\w'])"), re.compile(r"\bRDC\b"), "RDC = ККМВ (Королівська Компанія Мертвого Вогню, не рос. ККА)"),
+    ("STELGAER_SPELLING", re.compile(r"(?<![\w'])[Сс]тел[ґг]ер\w*", re.I), None, "уніфікація: «стелґаер» (не «стелґер»/«стелгер»)"),
+    ("TIRA_NUI_SPELLING", re.compile(r"тір\w*\s+нуі(?![а-яіїєґ])", re.I), None, "правопис: «тіра нуї» (ї після голосної)"),
 ]
 
 
